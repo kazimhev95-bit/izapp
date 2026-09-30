@@ -552,7 +552,7 @@ export default function App() {
   // Canlı konum izleyicisi. Kayıt açıkken HER ZAMAN çalışır (arka planda da — asıl kayıt kaynağı bu);
   // kayıt kapalıyken yalnız harita ekrandayken çalışır (mavi nokta için) ve arka planda durur.
   useEffect(() => {
-    if (!trk.fg || tracker.testMode() === 'task') return;
+    if (!trk.fg || ['task', 'taskind'].includes(tracker.testMode())) return;
     if (!trk.running && !(tab === 'harita' && active)) return;
     return tracker.watch(setMe, trk.running);
   }, [trk.fg, trk.running, tab, active]);

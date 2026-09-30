@@ -56,7 +56,7 @@ export const MAP_HTML = `<!doctype html>
 
 // Uygulama verisini harita sayfasının beklediği yalın biçime çevirir.
 export function mapPayload({ legs, stays, pad }, colors, fit) {
-  const L = legs.map((l) => ({ color: colors[l.mode].color, dash: l.mode === 'metro', w: l.mode === 'raw' ? 3 : 5, pts: l.coords.map((c) => [c.latitude, c.longitude]) }));
+  const L = legs.map((l) => ({ color: colors[l.mode].color, dash: !!l.dash, w: l.mode === 'raw' ? 2 : 5, pts: l.coords.map((c) => [c.latitude, c.longitude]) }));
   return {
     legs: L, stays: stays.map((s) => ({ key: s.key, lat: s.lat, lon: s.lon })),
     fit, pad: pad || { top: 120, right: 50, bottom: 260, left: 50 },

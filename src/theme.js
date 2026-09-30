@@ -10,6 +10,7 @@ export const C = {
 export const MODE = {
   walk: { label: 'Yaya', color: '#2DA44E', icon: 'walk' },
   bike: { label: 'Bisiklet', color: '#BF8700', icon: 'bike' },
+  bus: { label: 'Otobüs', color: '#D4570B', icon: 'bus' },
   car: { label: 'Araba', color: '#1F6FEB', icon: 'car' },
   metro: { label: 'Metro', color: '#8250DF', icon: 'subway-variant' },
 };
@@ -36,3 +37,4 @@ export function fmtDur(ms) {
 }
 export const fmtKm = (m) => (m < 1000 ? Math.round(m) + ' m' : (m / 1000).toFixed(m < 10000 ? 1 : 0) + ' km');
 export const fmtKmh = (ms) => Math.round(ms * 3.6) + ' km/s';
+export const fmtInt = (n) => String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/g, ' '); // 12 345

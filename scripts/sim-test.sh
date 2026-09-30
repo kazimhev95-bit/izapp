@@ -42,20 +42,22 @@ scenario() { # $1 ad, $2 mod (task|watch|both), $3 izin (location|location-alway
   q "insert or replace into kv(k,v) values('test_mode','\"$MODE\"'),('rec','true'); delete from stat;"
   # Hareket: ~3 m/sn, saniyede bir konum
   xcrun simctl location "$UDID" start --speed=3 --interval=1 40.4093,49.8671 40.4180,49.8800 40.4093,49.8671 40.4180,49.8800
-  xcrun simctl launch "$UDID" "$BID" >/dev/null; sleep 35
+  xcrun simctl launch "$UDID" "$BID" >/dev/null; sleep 25
   snap "$NAME-1-onde"
-  xcrun simctl launch "$UDID" com.apple.Preferences >/dev/null; sleep 80
+  xcrun simctl launch "$UDID" com.apple.Preferences >/dev/null; sleep 75
   snap "$NAME-2-arkada"
-  xcrun simctl launch "$UDID" "$BID" >/dev/null; sleep 15
+  echo "--- sistem gunlugu: surec neden askiya alindi? (runningboardd / locationd)"
+  xcrun simctl spawn "$UDID" log show --last 90s --style compact --predicate "(process == \"runningboardd\" OR process == \"locationd\") AND eventMessage CONTAINS \"$BID\" AND (eventMessage CONTAINS[c] \"suspend\" OR eventMessage CONTAINS[c] \"assertion\" OR eventMessage CONTAINS[c] \"background\" OR eventMessage CONTAINS[c] \"inuse\" OR eventMessage CONTAINS[c] \"authoriz\")" 2>/dev/null | cut -c1-420 | tail -n 45
+  xcrun simctl launch "$UDID" "$BID" >/dev/null; sleep 12
   snap "$NAME-3-tekrar-onde"
-  echo "--- yerel gunluk (EXTaskService / konum)"
-  xcrun simctl spawn "$UDID" log show --last 3m --style compact --predicate "process == \"$EXE\" AND (eventMessage CONTAINS \"EXTaskService\" OR eventMessage CONTAINS[c] \"location\")" 2>/dev/null | tail -n 25
   xcrun simctl location "$UDID" clear
 }
 
 scenario A-gorev-hepzaman task location-always
-scenario B-izleyici-hepzaman watch location-always
-scenario C-ikisi-kullanirken both location
+scenario D-gorev-kullanirken task location
+scenario E-izleyici-kullanirken watch location
+scenario F-ikisi-hepzaman both location-always
+scenario G-gorev-gosterge-hepzaman taskind location-always
 
 echo; echo "=== cokme kayitlari"
 ls -la ~/Library/Logs/DiagnosticReports/ 2>/dev/null | grep -i "$EXE" | tail -n 5 || echo "yok"

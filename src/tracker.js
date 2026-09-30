@@ -72,6 +72,7 @@ export async function start(profile = 'birebir') {
     if (!fg.granted) { note('d_startErr', 'konum izni verilmedi'); return status(); }
     // Sınama modunda izin penceresi açılmaz (simülatörde kapatacak kimse yok).
     const bg = mode ? await Location.getBackgroundPermissionsAsync() : await Location.requestBackgroundPermissionsAsync().catch(() => ({ granted: false }));
+    note('d_perm', fg.status + '/' + (fg.ios ? fg.ios.scope : '?') + ' bg:' + bg.status);
     if (await taskStarted()) await Location.stopLocationUpdatesAsync(TASK);
     if (mode !== 'watch') {
       await Location.startLocationUpdatesAsync(TASK, {
@@ -79,7 +80,7 @@ export async function start(profile = 'birebir') {
         activityType: Location.ActivityType.Other,
         pausesUpdatesAutomatically: false, // iOS durunca kaydı kendi kesmesin; tekrar başlatmayabiliyor
         // "Her Zaman" izni yoksa arka planda çalışmanın tek yolu mavi gösterge çubuğudur.
-        showsBackgroundLocationIndicator: !bg.granted,
+        showsBackgroundLocationIndicator: mode === 'taskind' ? true : !bg.granted,
       });
     }
     note('d_startErr', null); note('d_startAt', Date.now());

@@ -1,8 +1,9 @@
 // Web önizlemesi için bellek içi depo (SQLite yerine) — sentetik demo veriyle dolu gelir.
 // İmzalar store.js ile birebir aynıdır.
-import { demoPoints } from './demo';
+import { demoData } from './demo';
 
-let points = demoPoints(Date.now(), 21);
+const D = demoData(Date.now(), 21);
+let points = D.points, acts = D.acts;
 let places = [], nextId = 1, overrides = {}, kv = {};
 
 export function insertPoints(arr) { points = points.concat(arr).sort((a, b) => a.t - b.t); }
@@ -24,7 +25,9 @@ export function setOverride(t0, mode) { if (mode) overrides[t0] = mode; else del
 export function getKV(k, def = null) { return k in kv ? kv[k] : def; }
 export function setKV(k, v) { kv[k] = v; }
 
+export function insertActivity(t, k, c) { acts.push({ t, k, c }); }
+export function getActivity(a, b) { return acts.filter((x) => x.t >= a && x.t < b); }
 export function bumpStat() {}
 export function getStats() { return {}; }
 
-export function wipeAll() { points = []; places = []; overrides = {}; kv = {}; }
+export function wipeAll() { acts = []; points = []; places = []; overrides = {}; kv = {}; }
