@@ -13,6 +13,7 @@ function db() {
     CREATE TABLE IF NOT EXISTS places (id INTEGER PRIMARY KEY AUTOINCREMENT, lat REAL NOT NULL, lon REAL NOT NULL, name TEXT, kind TEXT, addr TEXT);
     CREATE TABLE IF NOT EXISTS overrides (t0 INTEGER PRIMARY KEY, mode TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT);
+    CREATE TABLE IF NOT EXISTS stat (k TEXT PRIMARY KEY, n INTEGER NOT NULL DEFAULT 0, last INTEGER);
   `);
   return _db;
 }
@@ -45,5 +46,11 @@ export function setOverride(t0, mode) {
 
 export function getKV(k, def = null) { const r = db().getFirstSync('SELECT v FROM kv WHERE k = ?', k); return r ? JSON.parse(r.v) : def; }
 export function setKV(k, v) { db().runSync('INSERT OR REPLACE INTO kv (k, v) VALUES (?, ?)', k, JSON.stringify(v)); }
+
+// Sayaçlar (tanı): hangi kaynaktan, uygulama hangi durumdayken kaç olay geldi ve en son ne zaman.
+export function bumpStat(k, n, t) {
+  db().runSync('INSERT INTO stat (k, n, last) VALUES (?, ?, ?) ON CONFLICT(k) DO UPDATE SET n = n + excluded.n, last = excluded.last', k, n, t);
+}
+export function getStats() { const o = {}; for (const r of db().getAllSync('SELECT k, n, last FROM stat')) o[r.k] = { n: r.n, last: r.last }; return o; }
 
 export function wipeAll() { db().execSync('DELETE FROM points; DELETE FROM places; DELETE FROM overrides; DELETE FROM kv;'); }

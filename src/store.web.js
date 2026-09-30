@@ -24,4 +24,7 @@ export function setOverride(t0, mode) { if (mode) overrides[t0] = mode; else del
 export function getKV(k, def = null) { return k in kv ? kv[k] : def; }
 export function setKV(k, v) { kv[k] = v; }
 
+export function bumpStat() {}
+export function getStats() { return {}; }
+
 export function wipeAll() { points = []; places = []; overrides = {}; kv = {}; }

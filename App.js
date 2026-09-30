@@ -407,11 +407,10 @@ function AyarlarTab({ trk, onToggle, profile, setProfile, onWipe, rev }) {
           ['Arka plan kaydı çalışıyor', yn(dg.started)],
           ['Son başlatma', ago(dg.d_startAt)],
           ['Başlatma hatası', dg.d_startErr || 'yok'],
-          ['Arka plan: son nokta', ago(dg.d_taskLast)],
-          ['Arka plan: toplam nokta', String(dg.d_taskN || 0)],
-          ['Arka plan hatası', dg.d_taskErr || 'yok'],
-          ['Canlı konum: son', ago(dg.d_watchLast)],
-          ['Canlı konum hatası', dg.d_watchErr || 'yok'],
+          ['Görev hatası', dg.d_taskErr || 'yok'],
+          ['İzleyici hatası', dg.d_watchErr || 'yok'],
+          // Sayaçlar: kaynak-durum → adet (son saat). «background» satırları arka planda çalıştığını kanıtlar.
+          ...Object.keys(dg.stats || {}).sort().map((k) => [k, dg.stats[k].n + ' · ' + ago(dg.stats[k].last)]),
           ['Konum testi', testing ? 'bekleniyor…' : dg.test || 'yapılmadı'],
         ].map(([k, v]) => (
           <View key={k} style={{ paddingVertical: 4 }}>
@@ -528,6 +527,7 @@ export default function App() {
   const [trip, setTrip] = useState(null);
   const [place, setPlace] = useState(null);
   const [me, setMe] = useState(null); // canlı konum {lat, lon, acc}
+  const [active, setActive] = useState(AppState.currentState !== 'background'); // uygulama ekranda mı
   const tried = useRef(new Set()); // adres sorgusu denenmiş yerler (aynı yeri tekrar tekrar sorma)
   const bump = useCallback(() => setRev((r) => r + 1), []);
 
@@ -549,16 +549,21 @@ export default function App() {
     if (h.home || h.work) { store.setKV('hints', h); setHints(h); }
   }, []);
 
-  // Konum izni varken ve harita sekmesi açıkken canlı konumu izle (mavi nokta).
+  // Canlı konum izleyicisi. Kayıt açıkken HER ZAMAN çalışır (arka planda da — asıl kayıt kaynağı bu);
+  // kayıt kapalıyken yalnız harita ekrandayken çalışır (mavi nokta için) ve arka planda durur.
   useEffect(() => {
-    if (!trk.fg || tab !== 'harita') return;
+    if (!trk.fg || tracker.testMode() === 'task') return;
+    if (!trk.running && !(tab === 'harita' && active)) return;
     return tracker.watch(setMe, trk.running);
-  }, [trk.fg, trk.running, tab]);
+  }, [trk.fg, trk.running, tab, active]);
 
   // Ekran açıkken 4 sn'de bir ve uygulama öne gelince yenile.
   useEffect(() => {
     const id = setInterval(() => setTick((x) => x + 1), 4e3);
-    const sub = AppState.addEventListener('change', (a) => { if (a === 'active') { bump(); tracker.status().then(setTrk); } });
+    const sub = AppState.addEventListener('change', (a) => {
+      setActive(a !== 'background');
+      if (a === 'active') { bump(); tracker.status().then(setTrk); }
+    });
     return () => { clearInterval(id); sub.remove(); };
   }, []);
 

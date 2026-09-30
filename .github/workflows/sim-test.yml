@@ -1,0 +1,85 @@
+name: Simulator arka plan testi
+
+# iOS simülatöründe uygulamayı kurup arka planda konum kaydının çalışıp çalışmadığını ölçer.
+# Telefonsuz doğrulama için: 'sim' dalına push ya da elle çalıştırma.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [sim]
+
+jobs:
+  sim-test:
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - name: Kodu indir
+        uses: actions/checkout@v4
+
+      - name: En yeni Xcode'u sec
+        run: |
+          LATEST=$(ls -d /Applications/Xcode_*.app | sort -V | tail -n1)
+          echo "Secilen Xcode: $LATEST"
+          sudo xcode-select -s "$LATEST"
+          xcodebuild -version
+
+      - name: Simulator sec
+        run: |
+          mkdir -p sim-out
+          xcrun simctl list devices available | head -n 40
+          UDID=$(xcrun simctl list devices available -j | python3 -c "
+          import json,sys,re
+          d=json.load(sys.stdin)['devices']
+          best=None
+          for rt,devs in d.items():
+              m=re.search(r'iOS-(\d+)-(\d+)',rt)
+              if not m: continue
+              ver=(int(m.group(1)),int(m.group(2)))
+              for x in devs:
+                  if x.get('isAvailable') and x['name'].startswith('iPhone'):
+                      if best is None or ver>best[0]: best=(ver,x['udid'],x['name'])
+          print(best[1]); sys.stderr.write('secilen: %s iOS %s\n'%(best[2],best[0]))
+          ")
+          echo "$UDID" > sim-out/udid
+          echo "UDID=$UDID" >> "$GITHUB_ENV"
+
+      - name: Node.js kur
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: JS bagimliliklarini yukle (postinstall yerel yamayi uygular)
+        run: npm install
+
+      - name: iOS native projesini uret (prebuild)
+        run: npx expo prebuild --platform ios --no-install
+
+      - name: CocoaPods yukle
+        working-directory: ios
+        run: pod install
+
+      - name: Simulator icin derle (Release)
+        working-directory: ios
+        run: |
+          set -o pipefail
+          PROJ=$(ls -d *.xcodeproj | head -n1 | sed 's/\.xcodeproj$//')
+          xcodebuild \
+            -workspace "$PROJ.xcworkspace" \
+            -scheme "$PROJ" \
+            -configuration Release \
+            -sdk iphonesimulator \
+            -destination "platform=iOS Simulator,id=$UDID" \
+            -derivedDataPath "$PWD/dd" \
+            CODE_SIGNING_ALLOWED=NO \
+            build | tail -n 30
+          ls -la dd/Build/Products/Release-iphonesimulator/
+
+      - name: Senaryolari calistir
+        run: bash scripts/sim-test.sh 2>&1 | tee sim-out/sonuc.txt
+
+      - name: Ciktilari yukle
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sim-out
+          path: sim-out
