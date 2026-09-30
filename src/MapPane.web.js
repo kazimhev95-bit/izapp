@@ -5,7 +5,7 @@ import { MODE } from './theme';
 import { MAP_HTML, mapPayload } from './mapHtml';
 
 export default function MapPane(props) {
-  const { legs, stays, fitKey, onStayPress } = props;
+  const { legs, stays, fitKey, onStayPress, me, centerTick } = props;
   const ref = useRef(null), lastFit = useRef(null), live = useRef(props);
   const [ready, setReady] = useState(false);
   live.current = props;
@@ -28,6 +28,15 @@ export default function MapPane(props) {
     lastFit.current = fitKey;
     ref.current.contentWindow.postMessage(JSON.stringify(mapPayload(props, MODE, fit)), '*');
   }, [ready, legs, stays, fitKey]);
+
+  // Canlı konum noktası (MapPane.js ile aynı mantık)
+  const lastTick = useRef(centerTick), centered = useRef(false);
+  useEffect(() => {
+    if (!ready || !ref.current || !me) return;
+    const center = lastTick.current !== centerTick || (!centered.current && !legs.length && !stays.length);
+    lastTick.current = centerTick; centered.current = true;
+    ref.current.contentWindow.postMessage(JSON.stringify({ mePos: [me.lat, me.lon], acc: me.acc, center }), '*');
+  }, [ready, me, centerTick]);
 
   return (
     <View style={[StyleSheet.absoluteFill, { backgroundColor: '#F4F5F7' }]}>

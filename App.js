@@ -91,19 +91,26 @@ function ModeRow({ modes }) {
 }
 
 // ===================== HARİTA =====================
-function HaritaTab({ data, day, setDay, trk, onToggle, onPlace }) {
+function HaritaTab({ data, day, setDay, trk, onToggle, onPlace, me }) {
+  const [centerTick, setCenterTick] = useState(0); // konum düğmesine her basışta artar
   const legs = useMemo(() => data.items.filter((i) => i.type === 'trip').flatMap(tripLegs), [data]);
   const stays = useMemo(() => data.places.map((p) => ({ key: p.id, lat: p.lat, lon: p.lon, kind: p.kind, place: p })), [data]);
   const t = data.totals;
   return (
     <View style={{ flex: 1 }}>
-      <MapPane legs={legs} stays={stays} fitKey={String(day)} live={day >= dayStart(Date.now())} onStayPress={(m) => onPlace(m.place)} />
+      <MapPane legs={legs} stays={stays} fitKey={String(day)} me={me} centerTick={centerTick} onStayPress={(m) => onPlace(m.place)} />
       <View style={[s.overlayTop, { top: TOP }]}>
         <DateBar day={day} setDay={setDay} />
-        <TouchableOpacity style={s.recPill} onPress={onToggle}>
-          <View style={[s.dot, { backgroundColor: trk.running ? C.ok : C.bad }]} />
-          <Text style={s.recTx}>{trk.running ? 'Kayıt açık' : 'Kayıt kapalı — başlat'}</Text>
-        </TouchableOpacity>
+        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+          <TouchableOpacity style={s.recPill} onPress={onToggle}>
+            <View style={[s.dot, { backgroundColor: trk.running ? C.ok : C.bad }]} />
+            <Text style={s.recTx}>{trk.running ? 'Kayıt açık' : 'Kayıt kapalı — başlat'}</Text>
+          </TouchableOpacity>
+          {/* Konumuma git: haritayı şu an bulunduğum noktaya ortalar */}
+          <TouchableOpacity style={[s.locBtn, !me && { opacity: 0.5 }]} disabled={!me} onPress={() => setCenterTick(centerTick + 1)}>
+            <Feather name="navigation" size={18} color={C.accent} />
+          </TouchableOpacity>
+        </View>
       </View>
       <View style={s.overlayBottom}>
         <View style={s.statRow}>
@@ -436,6 +443,7 @@ export default function App() {
   const [hints, setHints] = useState(() => store.getKV('hints', null));
   const [trip, setTrip] = useState(null);
   const [place, setPlace] = useState(null);
+  const [me, setMe] = useState(null); // canlı konum {lat, lon, acc}
   const tried = useRef(new Set()); // adres sorgusu denenmiş yerler (aynı yeri tekrar tekrar sorma)
   const bump = useCallback(() => setRev((r) => r + 1), []);
 
@@ -456,6 +464,12 @@ export default function App() {
     const h = { home: pick('home'), work: pick('work') };
     if (h.home || h.work) { store.setKV('hints', h); setHints(h); }
   }, []);
+
+  // Konum izni varken ve harita sekmesi açıkken canlı konumu izle (mavi nokta).
+  useEffect(() => {
+    if (!trk.fg || tab !== 'harita') return;
+    return tracker.watch(setMe);
+  }, [trk.fg, tab]);
 
   // Ekran açıkken 30 sn'de bir ve uygulama öne gelince yenile.
   useEffect(() => {
@@ -507,7 +521,7 @@ export default function App() {
     <View style={{ flex: 1, backgroundColor: C.bg }}>
       <StatusBar style="dark" />
       <View style={{ flex: 1 }}>
-        {tab === 'harita' ? <HaritaTab data={data} day={day} setDay={setDay} trk={trk} onToggle={onToggle} onPlace={setPlace} /> : null}
+        {tab === 'harita' ? <HaritaTab data={data} day={day} setDay={setDay} trk={trk} onToggle={onToggle} onPlace={setPlace} me={me} /> : null}
         {tab === 'gunluk' ? <GunlukTab data={data} day={day} setDay={setDay} onTrip={setTrip} onPlace={setPlace} /> : null}
         {tab === 'analiz' ? <AnalizTab trk={trk} hints={hints} rev={rev} onPlace={setPlace} /> : null}
         {tab === 'ayarlar' ? <AyarlarTab trk={trk} onToggle={onToggle} profile={profile} setProfile={setProfile} onWipe={onWipe} rev={rev} /> : null}
@@ -548,6 +562,7 @@ const s = StyleSheet.create({
   dateSub: { color: C.dim, fontSize: 10 },
   overlayTop: { position: 'absolute', left: 14, right: 14 },
   recPill: { flexDirection: 'row', alignItems: 'center', gap: 6, alignSelf: 'flex-start', marginTop: 8, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8, backgroundColor: C.panel, borderWidth: 1, borderColor: C.line },
+  locBtn: { width: 40, height: 40, borderRadius: 10, marginTop: 8, backgroundColor: C.panel, borderWidth: 1, borderColor: C.line, alignItems: 'center', justifyContent: 'center' },
   recTx: { color: C.text, fontSize: 12, fontWeight: '600' },
   overlayBottom: { position: 'absolute', left: 14, right: 14, bottom: 12, backgroundColor: C.panel, borderWidth: 1, borderColor: C.line, borderRadius: 10, padding: 12, gap: 10 },
   statRow: { flexDirection: 'row', gap: 10 },

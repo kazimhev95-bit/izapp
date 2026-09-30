@@ -1,6 +1,7 @@
 // Harita sayfası (Leaflet + OpenStreetMap, açık yumuşak ton). Telefonda WebView, önizlemede iframe
 // içinde AYNI sayfa çalışır — önizlemede ne görünüyorsa telefonda da o görünür.
-// Veri dışarıdan izSet({legs, stays, me, fit, pad}) ile gelir; durağa dokunma {stay: key} olarak döner.
+// Veri dışarıdan izSet({legs, stays, fit, pad}) ile, canlı konum izMe({mePos, acc, center}) ile gelir;
+// durağa dokunma {stay: key} olarak döner.
 export const MAP_HTML = `<!doctype html>
 <html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
@@ -21,7 +22,19 @@ export const MAP_HTML = `<!doctype html>
   else{
     var map=L.map('m',{zoomControl:false,preferCanvas:true}) /* canvas: binlerce noktalı rota telefonu yormaz */.setView([40.4093,49.8671],12);
     L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,className:'bw',attribution:'© OpenStreetMap'}).addTo(map);
+    map.attributionControl.setPrefix(false); // Leaflet'in kendi logo/bayrak ön eki gösterilmez
     var g=L.layerGroup().addTo(map);
+    // Canlı konum noktası: rota katmanından ayrı durur, her konum güncellemesinde yalnız o kayar.
+    var meM=null,meA=null;
+    window.izMe=function(d){
+      var p=d.mePos;
+      if(!meM){
+        meA=L.circle(p,{radius:d.acc||0,color:'#2E7CF6',weight:0,fillColor:'#2E7CF6',fillOpacity:.12,interactive:false}).addTo(map);
+        meM=L.circleMarker(p,{radius:7,color:'#fff',weight:3,fillColor:'#2E7CF6',fillOpacity:1,interactive:false}).addTo(map);
+      }else{meM.setLatLng(p);meA.setLatLng(p);meA.setRadius(d.acc||0);}
+      meM.bringToFront();
+      if(d.center)map.setView(p,Math.max(map.getZoom(),16));
+    };
     window.izSet=function(d){
       g.clearLayers();
       var all=[];
@@ -34,21 +47,18 @@ export const MAP_HTML = `<!doctype html>
         L.circleMarker([s.lat,s.lon],{radius:9,color:'#0A84A8',weight:3,fillColor:'#FFFFFF',fillOpacity:1}).on('click',function(){send({stay:s.key});}).addTo(g);
         all.push([s.lat,s.lon]);
       });
-      if(d.me)L.circleMarker(d.me,{radius:6,color:'#fff',weight:2,fillColor:'#2E7CF6',fillOpacity:1}).addTo(g);
       if(d.fit&&all.length){map.invalidateSize();map.fitBounds(all,{paddingTopLeft:[d.pad.left,d.pad.top],paddingBottomRight:[d.pad.right,d.pad.bottom],maxZoom:17});}
     };
-    window.addEventListener('message',function(e){try{var d=JSON.parse(e.data);if(d&&d.legs)window.izSet(d);}catch(x){}});
+    window.addEventListener('message',function(e){try{var d=JSON.parse(e.data);if(d&&d.legs)window.izSet(d);else if(d&&d.mePos)window.izMe(d);}catch(x){}});
     send({ready:1});
   }
 </script></body></html>`;
 
 // Uygulama verisini harita sayfasının beklediği yalın biçime çevirir.
-export function mapPayload({ legs, stays, live, pad }, colors, fit) {
+export function mapPayload({ legs, stays, pad }, colors, fit) {
   const L = legs.map((l) => ({ color: colors[l.mode].color, dash: l.mode === 'metro', pts: l.coords.map((c) => [c.latitude, c.longitude]) }));
-  const last = L.length ? L[L.length - 1].pts : [];
   return {
     legs: L, stays: stays.map((s) => ({ key: s.key, lat: s.lat, lon: s.lon })),
-    me: live && last.length ? last[last.length - 1] : null, // bugünse: son kaydedilen konum
     fit, pad: pad || { top: 120, right: 50, bottom: 260, left: 50 },
   };
 }

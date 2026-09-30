@@ -55,6 +55,16 @@ export async function stop() {
   return status();
 }
 
+// Ekran açıkken canlı konum (haritadaki mavi nokta için). Kayıttan bağımsızdır, veritabanına yazmaz.
+// Aboneliği kapatan fonksiyonu döner.
+export function watch(cb) {
+  let sub = null, dead = false;
+  Location.watchPositionAsync({ accuracy: Location.Accuracy.High, distanceInterval: 2, timeInterval: 1000 }, (l) => {
+    cb({ lat: l.coords.latitude, lon: l.coords.longitude, acc: l.coords.accuracy });
+  }).then((x) => { if (dead) x.remove(); else sub = x; }).catch(() => {});
+  return () => { dead = true; if (sub) sub.remove(); };
+}
+
 // Koordinat -> kısa adres (iOS'un kendi servisi; ücretsiz, anahtar gerekmez).
 export async function geocode(lat, lon) {
   try {

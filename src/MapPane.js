@@ -7,7 +7,7 @@ import { MODE } from './theme';
 import { MAP_HTML, mapPayload } from './mapHtml';
 
 export default function MapPane(props) {
-  const { legs, stays, fitKey, onStayPress } = props;
+  const { legs, stays, fitKey, onStayPress, me, centerTick } = props;
   const ref = useRef(null), lastFit = useRef(null);
   const [ready, setReady] = useState(false);
 
@@ -20,6 +20,16 @@ export default function MapPane(props) {
     ref.current.injectJavaScript('window.izSet(' + JSON.stringify(mapPayload(props, MODE, fit)) + ');true;');
   }, [ready, legs, stays, fitKey]);
 
+  // Canlı konum: yalnız mavi nokta kayar (rota yeniden çizilmez). Konum düğmesine basılınca
+  // (centerTick) ya da gösterilecek rota yokken ilk konum gelince harita oraya ortalanır.
+  const lastTick = useRef(centerTick), centered = useRef(false);
+  useEffect(() => {
+    if (!ready || !ref.current || !me) return;
+    const center = lastTick.current !== centerTick || (!centered.current && !legs.length && !stays.length);
+    lastTick.current = centerTick; centered.current = true;
+    ref.current.injectJavaScript('window.izMe(' + JSON.stringify({ mePos: [me.lat, me.lon], acc: me.acc, center }) + ');true;');
+  }, [ready, me, centerTick]);
+
   const onMessage = (e) => {
     let m; try { m = JSON.parse(e.nativeEvent.data); } catch (x) { return; }
     if (m.ready) setReady(true);
@@ -31,7 +41,7 @@ export default function MapPane(props) {
       ref={ref} style={[StyleSheet.absoluteFill, { backgroundColor: '#F4F5F7' }]}
       originWhitelist={['*']} source={{ html: MAP_HTML, baseUrl: 'https://izapp.local/' }} // baseUrl: karo sunucusu Referer ister
       onMessage={onMessage} javaScriptEnabled domStorageEnabled scrollEnabled={false} bounces={false}
-      onContentProcessDidTerminate={() => { setReady(false); lastFit.current = null; ref.current && ref.current.reload(); }}
+      onContentProcessDidTerminate={() => { setReady(false); lastFit.current = null; centered.current = false; ref.current && ref.current.reload(); }}
     />
   );
 }
