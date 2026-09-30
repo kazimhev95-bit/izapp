@@ -1,7 +1,7 @@
 // Harita (web önizleme): telefondaki ile AYNI sayfayı (mapHtml.js) iframe içinde gösterir.
 import React, { useEffect, useRef, useState } from 'react';
 import { View, StyleSheet } from 'react-native';
-import { MODE } from './theme';
+import { LINE } from './theme';
 import { MAP_HTML, mapPayload } from './mapHtml';
 
 export default function MapPane(props) {
@@ -26,7 +26,7 @@ export default function MapPane(props) {
     if (!ready || !ref.current) return;
     const fit = lastFit.current !== fitKey;
     lastFit.current = fitKey;
-    ref.current.contentWindow.postMessage(JSON.stringify(mapPayload(props, MODE, fit)), '*');
+    ref.current.contentWindow.postMessage(JSON.stringify(mapPayload(props, LINE, fit)), '*');
   }, [ready, legs, stays, fitKey]);
 
   // Canlı konum noktası (MapPane.js ile aynı mantık)

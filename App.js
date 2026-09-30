@@ -9,7 +9,7 @@ import MapPane from './src/MapPane';
 import * as store from './src/store';
 import * as tracker from './src/tracker';
 import { analyze, dayStart, addDays, MODES } from './src/engine';
-import { C, MODE, fmtClock, fmtMin, fmtDay, fmtDayShort, fmtDate, fmtDur, fmtKm, fmtKmh } from './src/theme';
+import { C, MODE, fmtClock, fmtClockS, fmtMin, fmtDay, fmtDayShort, fmtDate, fmtDur, fmtKm, fmtKmh } from './src/theme';
 
 const VERSION = require('./app.json').expo.version;
 const TOP = Platform.OS === 'ios' ? 54 : 14;   // çentik payı
@@ -93,7 +93,11 @@ function ModeRow({ modes }) {
 // ===================== HARİTA =====================
 function HaritaTab({ data, day, setDay, trk, onToggle, onPlace, me }) {
   const [centerTick, setCenterTick] = useState(0); // konum düğmesine her basışta artar
-  const legs = useMemo(() => data.items.filter((i) => i.type === 'trip').flatMap(tripLegs), [data]);
+  // Önce ham iz (her kayıtlı nokta, ince gri), üstüne türü belirlenmiş yolculuklar (renkli).
+  const legs = useMemo(() => [
+    ...data.track.map((l) => ({ mode: 'raw', coords: toCoords(l) })),
+    ...data.items.filter((i) => i.type === 'trip').flatMap(tripLegs),
+  ], [data]);
   const stays = useMemo(() => data.places.map((p) => ({ key: p.id, lat: p.lat, lon: p.lon, kind: p.kind, place: p })), [data]);
   const t = data.totals;
   return (
@@ -120,6 +124,8 @@ function HaritaTab({ data, day, setDay, trk, onToggle, onPlace, me }) {
           <Stat label="Yer" value={String(data.places.length)} />
         </View>
         <ModeRow modes={t.modes} />
+        {/* Kayıt gerçekten işliyor mu? Nokta sayısı hareket ettikçe artmalı. */}
+        <Text style={s.dim}>{data.nPoints} nokta kaydedildi{data.lastT ? ' · son ' + fmtClockS(data.lastT) : ''}</Text>
       </View>
     </View>
   );
@@ -468,12 +474,12 @@ export default function App() {
   // Konum izni varken ve harita sekmesi açıkken canlı konumu izle (mavi nokta).
   useEffect(() => {
     if (!trk.fg || tab !== 'harita') return;
-    return tracker.watch(setMe);
-  }, [trk.fg, tab]);
+    return tracker.watch(setMe, trk.running);
+  }, [trk.fg, trk.running, tab]);
 
-  // Ekran açıkken 30 sn'de bir ve uygulama öne gelince yenile.
+  // Ekran açıkken 10 sn'de bir ve uygulama öne gelince yenile.
   useEffect(() => {
-    const id = setInterval(bump, 30e3);
+    const id = setInterval(bump, 10e3);
     const sub = AppState.addEventListener('change', (a) => { if (a === 'active') { bump(); tracker.status().then(setTrk); } });
     return () => { clearInterval(id); sub.remove(); };
   }, []);

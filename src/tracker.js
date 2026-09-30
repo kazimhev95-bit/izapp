@@ -55,12 +55,20 @@ export async function stop() {
   return status();
 }
 
-// Ekran açıkken canlı konum (haritadaki mavi nokta için). Kayıttan bağımsızdır, veritabanına yazmaz.
+// Ekran açıkken canlı konum (haritadaki mavi nokta için). record=true ise noktalar veritabanına da
+// yazılır: arka plan görevi herhangi bir nedenle nokta vermese bile uygulama açıkken iz kaydolur
+// (aynı zaman damgası iki kez gelirse depo yok sayar).
 // Aboneliği kapatan fonksiyonu döner.
-export function watch(cb) {
+export function watch(cb, record) {
   let sub = null, dead = false;
-  Location.watchPositionAsync({ accuracy: Location.Accuracy.High, distanceInterval: 2, timeInterval: 1000 }, (l) => {
+  Location.watchPositionAsync({ accuracy: Location.Accuracy.BestForNavigation, distanceInterval: 2, timeInterval: 1000 }, (l) => {
     cb({ lat: l.coords.latitude, lon: l.coords.longitude, acc: l.coords.accuracy });
+    if (record) {
+      try {
+        insertPoints([{ t: Math.round(l.timestamp), lat: l.coords.latitude, lon: l.coords.longitude, acc: l.coords.accuracy,
+          spd: l.coords.speed != null && l.coords.speed >= 0 ? l.coords.speed : null }]);
+      } catch (e) { /* yoksay */ }
+    }
   }).then((x) => { if (dead) x.remove(); else sub = x; }).catch(() => {});
   return () => { dead = true; if (sub) sub.remove(); };
 }

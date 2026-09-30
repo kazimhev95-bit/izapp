@@ -3,7 +3,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { StyleSheet } from 'react-native';
 import { WebView } from 'react-native-webview';
-import { MODE } from './theme';
+import { LINE } from './theme';
 import { MAP_HTML, mapPayload } from './mapHtml';
 
 export default function MapPane(props) {
@@ -17,7 +17,7 @@ export default function MapPane(props) {
     if (!ready || !ref.current) return;
     const fit = lastFit.current !== fitKey;
     lastFit.current = fitKey;
-    ref.current.injectJavaScript('window.izSet(' + JSON.stringify(mapPayload(props, MODE, fit)) + ');true;');
+    ref.current.injectJavaScript('window.izSet(' + JSON.stringify(mapPayload(props, LINE, fit)) + ');true;');
   }, [ready, legs, stays, fitKey]);
 
   // Canlı konum: yalnız mavi nokta kayar (rota yeniden çizilmez). Konum düğmesine basılınca

@@ -14,12 +14,16 @@ export const MODE = {
   metro: { label: 'Metro', color: '#8250DF', icon: 'subway-variant' },
 };
 
+// Haritada çizgi renkleri: türler + 'raw' (ham iz — türü belirlenmemiş her hareket)
+export const LINE = { ...MODE, raw: { color: '#5B6873' } };
+
 const AY = ['Oca', 'Şub', 'Mar', 'Nis', 'May', 'Haz', 'Tem', 'Ağu', 'Eyl', 'Eki', 'Kas', 'Ara'];
 const GUN = ['Paz', 'Pzt', 'Sal', 'Çar', 'Per', 'Cum', 'Cmt'];
 const p2 = (n) => String(n).padStart(2, '0');
 
 // Biçimlendirme (Intl kullanılmaz: Hermes'te yerel ayar desteği güvenilir değil)
 export const fmtClock = (t) => { const d = new Date(t); return p2(d.getHours()) + ':' + p2(d.getMinutes()); };
+export const fmtClockS = (t) => fmtClock(t) + ':' + p2(new Date(t).getSeconds());
 export const fmtMin = (m) => p2(Math.floor(m / 60)) + ':' + p2(m % 60);
 export const fmtDay = (t) => { const d = new Date(t); return d.getDate() + ' ' + AY[d.getMonth()] + ' ' + GUN[d.getDay()]; };
 export const fmtDayShort = (t) => GUN[new Date(t).getDay()];

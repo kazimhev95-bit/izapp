@@ -40,7 +40,7 @@ export const MAP_HTML = `<!doctype html>
       var all=[];
       d.legs.forEach(function(l){
         // smoothFactor 0: çizgi sadeleştirilmez, kaydedilen her nokta aynen çizilir
-        L.polyline(l.pts,{color:l.color,weight:5,lineCap:'round',lineJoin:'round',smoothFactor:0,dashArray:l.dash?'8 8':null}).addTo(g);
+        L.polyline(l.pts,{color:l.color,weight:l.w,lineCap:'round',lineJoin:'round',smoothFactor:0,dashArray:l.dash?'8 8':null}).addTo(g);
         all=all.concat(l.pts);
       });
       d.stays.forEach(function(s){
@@ -56,7 +56,7 @@ export const MAP_HTML = `<!doctype html>
 
 // Uygulama verisini harita sayfasının beklediği yalın biçime çevirir.
 export function mapPayload({ legs, stays, pad }, colors, fit) {
-  const L = legs.map((l) => ({ color: colors[l.mode].color, dash: l.mode === 'metro', pts: l.coords.map((c) => [c.latitude, c.longitude]) }));
+  const L = legs.map((l) => ({ color: colors[l.mode].color, dash: l.mode === 'metro', w: l.mode === 'raw' ? 3 : 5, pts: l.coords.map((c) => [c.latitude, c.longitude]) }));
   return {
     legs: L, stays: stays.map((s) => ({ key: s.key, lat: s.lat, lon: s.lon })),
     fit, pad: pad || { top: 120, right: 50, bottom: 260, left: 50 },
