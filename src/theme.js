@@ -15,8 +15,9 @@ export const MODE = {
   metro: { label: 'Metro', color: '#8250DF', icon: 'subway-variant' },
 };
 
-// Haritada çizgi renkleri: türler + 'raw' (ham iz — türü belirlenmemiş her hareket)
-export const LINE = { ...MODE, raw: { color: '#5B6873' } };
+// Haritada çizgi renkleri: türler + 'raw' (ham iz, ince gri) + 'track' (gerçek iz: yola oturtmadan önceki
+// yerel düzeltilmiş çizgi — turuncu kesik; kullanıcı "turuncu doğru" dediği için karşılaştırma katmanı)
+export const LINE = { ...MODE, raw: { color: '#5B6873' }, track: { color: '#FF8A00' } };
 
 const AY = ['Oca', 'Şub', 'Mar', 'Nis', 'May', 'Haz', 'Tem', 'Ağu', 'Eyl', 'Eki', 'Kas', 'Ara'];
 const GUN = ['Paz', 'Pzt', 'Sal', 'Çar', 'Per', 'Cum', 'Cmt'];

@@ -7,6 +7,7 @@
 //                    cevap {v, legs:[{id, ok, d, parts:[{g:0|1, c:[[lat, lon], ...]}]} | {id, ok:false, why}]}
 //                    g=1: iki eşleşme arasındaki boşluk (telefonda kesikli çizilir)
 //   GET  /v1/health  motorlar ayakta mı
+//   GET  /v1/busstops  (x-iz-key) OSM otobüs durakları {v, n, pts:[[lat, lon], ...]} — otobüs/araba ayrımı için
 // Gizlilik: hiçbir istek diske/veritabanına yazılmaz, konum loglanmaz (nginx'te de access_log kapalı).
 // Bağımlılık yok (Node 20: fetch + http).
 const http = require('http');
@@ -178,6 +179,12 @@ if (require.main === module) http.createServer(async (req, res) => {
       const ping = async (net) => { try { return (await (await fetch(OSRM[net] + '/nearest/v1/x/49.8671,40.4093', { signal: AbortSignal.timeout(3000) })).json()).code === 'Ok'; } catch (e) { return false; } };
       const foot = await ping('foot'), car = await ping('car');
       return send(res, foot && car ? 200 : 503, { ok: foot && car, v: V, foot, car });
+    }
+    if (req.method === 'GET' && url === '/v1/busstops') {
+      if (!keyOk(req.headers['x-iz-key'])) return send(res, 401, { error: 'anahtar' });
+      let b;
+      try { b = fs.readFileSync(path.join(__dirname, 'data', 'stops.json')); } catch (e) { return send(res, 404, { error: 'durak listesi yok' }); }
+      res.writeHead(200, HEAD); return res.end(b);
     }
     if (req.method !== 'POST' || url !== '/v1/match') return send(res, 404, { error: 'yok' });
     if (!keyOk(req.headers['x-iz-key'])) return send(res, 401, { error: 'anahtar' });

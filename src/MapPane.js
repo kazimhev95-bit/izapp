@@ -18,7 +18,14 @@ export default function MapPane(props) {
     const fit = lastFit.current !== fitKey;
     lastFit.current = fitKey;
     ref.current.injectJavaScript('window.izSet(' + JSON.stringify(mapPayload(props, LINE, fit)) + ');true;');
-  }, [ready, legs, stays, props.marks, props.dots, fitKey]);
+  }, [ready, legs, stays, props.marks, props.dots, props.rings, fitKey]);
+
+  // Hız grafiğinde seçilen an: haritada koyu nokta + saat/hız etiketi
+  useEffect(() => {
+    if (!ready || !ref.current) return;
+    const c = props.cursor;
+    ref.current.injectJavaScript('window.izCur(' + JSON.stringify(c ? { pos: [c.lat, c.lon], label: c.label } : {}) + ');true;');
+  }, [ready, props.cursor]);
 
   // Canlı konum: yalnız mavi nokta kayar (rota yeniden çizilmez). Konum düğmesine basılınca
   // (centerTick) ya da gösterilecek rota yokken ilk konum gelince harita oraya ortalanır.
@@ -35,6 +42,7 @@ export default function MapPane(props) {
     let m; try { m = JSON.parse(e.nativeEvent.data); } catch (x) { return; }
     if (m.ready) setReady(true);
     if (m.drag && props.onUserDrag) props.onUserDrag();
+    if (m.trip != null && props.onTripPress) props.onTripPress(m.trip); // parça bilgisindeki "Ayrıntılar"
     if (m.stay && onStayPress) { const s = stays.find((x) => x.key === m.stay); if (s) onStayPress(s); }
   };
 

@@ -55,5 +55,46 @@ export async function fill(items) {
   return got > 0;
 }
 
+// ---- Otobüs durakları (OSM, kendi sunucumuzdan) ----
+// Bir kez indirilir (~40 KB), 30 günde bir tazelenir; sonra çevrimdışı çalışır. Motor aracın durduğu yerlerin
+// gerçek durağa denk gelip gelmediğine bakar: otobüs durakta durur, araba ışıkta/tıxacda rastgele yerde.
+const CELL = 0.002; // ° (~200 m) ızgara hücresi
+let stopIdx; // undefined: henüz yüklenmedi, null: liste yok
+function loadIdx() {
+  if (stopIdx !== undefined) return stopIdx;
+  const s = store.getKV('busstops', null);
+  if (!s || !s.pts) return (stopIdx = null);
+  const g = new Map();
+  for (const [la, lo] of s.pts) { const k = Math.floor(la / CELL) + ':' + Math.floor(lo / CELL); if (!g.has(k)) g.set(k, []); g.get(k).push([la, lo]); }
+  return (stopIdx = g);
+}
+// En yakın otobüs durağına uzaklık (m); ~200 m'den uzaksa Infinity
+function nearStop(lat, lon) {
+  const g = stopIdx, gy = Math.floor(lat / CELL), gx = Math.floor(lon / CELL), k = Math.cos((lat * Math.PI) / 180);
+  let m = Infinity;
+  for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+    for (const q of g.get(gy + dy + ':' + (gx + dx)) || []) { const d = Math.hypot((q[0] - lat) * 111320, (q[1] - lon) * 111320 * k); if (d < m) m = d; }
+  }
+  return m;
+}
+// analyze() için: liste varsa uzaklık fonksiyonu, yoksa null (o zaman durak ipucu kullanılmaz)
+export const busNear = () => (loadIdx() ? nearStop : null);
+// Listeyi indir (yoksa ya da 30 günden eskiyse). Dönüş: yeni liste geldiyse true (analiz yenilensin).
+export async function fetchStops() {
+  if (!KEY) return false;
+  const s = store.getKV('busstops', null);
+  if (s && Date.now() - (s.at || 0) < 30 * 86400e3) return false;
+  try {
+    const res = await fetch('https://' + SNAP_HOST + '/v1/busstops', { headers: { 'x-iz-key': KEY } });
+    if (!res.ok) return false;
+    const j = await res.json();
+    if (!j || !Array.isArray(j.pts) || !j.pts.length) return false;
+    store.setKV('busstops', { v: j.v, n: j.n, pts: j.pts, at: Date.now() });
+    stopIdx = undefined;
+    return true;
+  } catch (e) { return false; }
+}
+export const stopsInfo = () => { const s = store.getKV('busstops', null); return s ? { n: s.n, v: s.v } : null; };
+
 // Önbelleği boşalt: tüm parçalar yeniden sorulur (sunucu kuralları iyileşince)
 export function reset() { store.clearSnaps(); nextTry = 0; }

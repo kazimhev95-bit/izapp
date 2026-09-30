@@ -8,6 +8,8 @@ export const testMode = () => null;
 export async function startActivity() { return true; }
 export function stopActivity() {}
 export function setSmart() {}
+export const stillSec = () => 120;
+export function setStill() {}
 export async function diag(test) {
   return { services: true, fg: 'granted / always', bg: 'granted', registered: true, started: running, motion: 'granted', power: 'high', stats: {}, test: test ? 'önizlemede yok' : undefined };
 }

@@ -46,13 +46,15 @@ export function snapCandidates(items, now, known) {
 // pts: [{lat, lon, acc}] (parçanın düzeltilmiş noktaları), parts: sunucunun çizgileri [{g, c: [[lat, lon], ...]}]
 // Dönüş: {pts: [{lat, lon, via}] (via: bu noktadan ÖNCE eklenecek yol köşeleri), d: çizgi uzunluğu (m)}
 const FUSE = { walk: [10, 25, 12], bike: [10, 25, 12], car: [15, 40, 17], bus: [15, 40, 17] };     // öbek dışı [NEAR, FAR, MOVE] m
-const CORR = { walk: [28, 35, 4, 12], bike: [28, 35, 4, 12], car: [45, 70, 3, 0], bus: [45, 70, 3, 0] }; // [taban, tavan, en az nokta, SIDE]
+// [taban, tavan, en az nokta, SIDE, doğruluk çarpanı]. Araçta iyi GPS'le koridor dar (25 m): noktalar yola
+// 25 m'den uzak ve iyiyse eşleştirme yanlış sokağı seçmiş olabilir — oraya yapıştırma.
+const CORR = { walk: [28, 35, 4, 12, 1.2], bike: [28, 35, 4, 12, 1.2], car: [25, 70, 3, 0, 1.5], bus: [25, 70, 3, 0, 1.5] };
 // Köşe ekleme payı: yol yayı ≤ oran × kiriş + pay (araçta seyrek noktada L köşe ~1,41 oran ister)
 const VIA = { walk: [1.3, 8], bike: [1.3, 8], car: [1.5, 20], bus: [1.5, 20] };
 const M_DEG = 111320; // m / enlem derecesi
 
 export function fuseSnap(pts, parts, mode) {
-  const [NEAR0, FAR0, MOVE0] = FUSE[mode] || FUSE.walk, [VR, VS] = VIA[mode] || VIA.walk, [C0, C1, RUN_N, SIDE] = CORR[mode] || CORR.walk;
+  const [NEAR0, FAR0, MOVE0] = FUSE[mode] || FUSE.walk, [VR, VS] = VIA[mode] || VIA.walk, [C0, C1, RUN_N, SIDE, CK] = CORR[mode] || CORR.walk;
   const lat0 = pts[0].lat, lon0 = pts[0].lon, kx = Math.cos((lat0 * Math.PI) / 180);
   const X = (la, lo) => [(lo - lon0) * M_DEG * kx, (la - lat0) * M_DEG];
   const back = (x, y) => ({ lat: lat0 + y / M_DEG, lon: lon0 + x / (M_DEG * kx) });
@@ -84,7 +86,7 @@ export function fuseSnap(pts, parts, mode) {
   // 1) Koridor öbekleri
   const run = new Array(P.length).fill(-1);
   for (let i = 0, id = 0; i < P.length;) {
-    const inC = (k) => !!P[k].b && P[k].b.d <= Math.min(C1, Math.max(C0, 1.2 * acc(k)));
+    const inC = (k) => !!P[k].b && P[k].b.d <= Math.min(C1, Math.max(C0, CK * acc(k)));
     if (!inC(i)) { i++; continue; }
     let j = i;
     while (j + 1 < P.length && inC(j + 1)) j++;

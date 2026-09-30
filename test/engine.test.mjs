@@ -201,6 +201,14 @@ const jogActs = []; for (let t = 0; t <= jog.end; t += 60e3) jogActs.push({ t, k
 const Jg = analyze([...jog.pts, ...stayAt(jog.end + 20e3, 640 * 3.2, 8)], { from: 0, to: 3 * 3600e3, acts: jogActs });
 ok(legsOf(Jg) === 'walk', 'koşu (hareket kaydıyla) yaya sayılır: ' + legsOf(Jg));
 
+// Otobüs durağı ipucu (OSM): yürüyüşsüz dur-kalk araç. Duruşlar gerçek durağa denk geliyorsa otobüs,
+// gelmiyorsa (ışık/tıxac) araba; durak listesi yoksa eski kurallar (araba).
+{
+  const bl = drive(hops(8, 40, 9, 25)), P = [...bl.pts, ...stayAt(bl.end + 20e3, 8 * 40 * 9, 8)], O = { from: 0, to: 3 * 3600e3 };
+  const X0 = analyze(P, O), X1 = analyze(P, { ...O, busNear: () => 10 }), X2 = analyze(P, { ...O, busNear: () => 400 });
+  ok(legsOf(X0) === 'car' && legsOf(X1) === 'bus' && legsOf(X2) === 'car', 'duruşlar otobüs durağında → otobüs; değilse araba: ' + [legsOf(X0), legsOf(X1), legsOf(X2)].join(' / '));
+}
+
 // Aktarma: durağa yürü, bekle, otobüs, İN → 90 sn yürü + 1 dk bekle → başka otobüs, in, yürü. Hareket kaydı YOK.
 // Aradaki 1,5 dk'lık yürüyüş "trafikte bekleme" sanılıp otobüse katılMAMALI (kullanıcının 30 Eyl şikâyeti).
 const xfer = drive([[150, 1.35], [120, 0], ...hops(8, 45, 9, 20), [90, 1.3], [60, 0], ...hops(8, 45, 9, 20), [100, 1.35]]);

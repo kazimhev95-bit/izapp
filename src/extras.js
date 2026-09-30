@@ -21,6 +21,22 @@ export async function askMotion() {
   try { return (await Pedometer.requestPermissionsAsync()).granted; } catch (e) { return false; }
 }
 
+// Bir yolculuğu GPX (her harita/spor uygulamasının açtığı standart iz dosyası) olarak paylaşır.
+// Ham GPS noktaları zamanıyla yazılır; name: dosyadaki iz adı (ör. "Ev → İş").
+export async function exportGpx(trip, name) {
+  const esc = (x) => String(x).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  const pts = (trip.raw || trip.pts).filter((q) => !q.syn);
+  const lines = ['<?xml version="1.0" encoding="UTF-8"?>', '<gpx version="1.1" creator="IZ" xmlns="http://www.topografix.com/GPX/1/1">', '<trk><name>' + esc(name) + '</name><trkseg>'];
+  for (const q of pts) lines.push('<trkpt lat="' + q.lat.toFixed(6) + '" lon="' + q.lon.toFixed(6) + '"><time>' + new Date(q.t).toISOString() + '</time></trkpt>');
+  lines.push('</trkseg></trk></gpx>');
+  const d = new Date(trip.t0), p2 = (n) => String(n).padStart(2, '0');
+  const f = new File(Paths.cache, 'iz-yolculuk-' + d.getFullYear() + '-' + p2(d.getMonth() + 1) + '-' + p2(d.getDate()) + '-' + p2(d.getHours()) + p2(d.getMinutes()) + '.gpx');
+  f.create({ overwrite: true });
+  f.write(lines.join('\n'));
+  await Share.share({ url: f.uri });
+  return pts.length;
+}
+
 // Ham kayıtları (konum noktaları + hareket kayıtları) CSV dosyası yapıp iOS paylaşım penceresini açar.
 // Amaç: gerçek veriyle ayar yapmak — dosyayı bilgisayara gönderince düzeltme/tür eşikleri onunla denenir.
 // Dönüş: dışa aktarılan nokta sayısı.

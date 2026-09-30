@@ -17,6 +17,7 @@ export default function MapPane(props) {
       let m; try { m = JSON.parse(e.data); } catch (x) { return; }
       if (m.ready) setReady(true);
       if (m.drag && live.current.onUserDrag) live.current.onUserDrag();
+      if (m.trip != null && live.current.onTripPress) live.current.onTripPress(m.trip);
       if (m.stay && live.current.onStayPress) { const s = live.current.stays.find((x) => x.key === m.stay); if (s) live.current.onStayPress(s); }
     };
     window.addEventListener('message', h);
@@ -28,7 +29,14 @@ export default function MapPane(props) {
     const fit = lastFit.current !== fitKey;
     lastFit.current = fitKey;
     ref.current.contentWindow.postMessage(JSON.stringify(mapPayload(props, LINE, fit)), '*');
-  }, [ready, legs, stays, props.marks, props.dots, fitKey]);
+  }, [ready, legs, stays, props.marks, props.dots, props.rings, fitKey]);
+
+  // Hız grafiğinde seçilen an (MapPane.js ile aynı)
+  useEffect(() => {
+    if (!ready || !ref.current) return;
+    const c = props.cursor;
+    ref.current.contentWindow.postMessage(JSON.stringify({ cur: c ? { pos: [c.lat, c.lon], label: c.label } : {} }), '*');
+  }, [ready, props.cursor]);
 
   // Canlı konum noktası (MapPane.js ile aynı mantık)
   const lastTick = useRef(centerTick), centered = useRef(false);

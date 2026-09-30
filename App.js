@@ -26,11 +26,14 @@ const toCoords = (pts) => pts.map((p) => ({ latitude: p.lat, longitude: p.lon })
 // bölümler kesikli. Kayıtlı bölümler sadeleştirilir. Uçlar komşu durağın işaretine bağlanır.
 // Yola oturtulmuş parçada (leg.snap) noktalar yolla birleştirilmiş konumdadır ve aralarına yolun köşeleri
 // eklenir — çizgi yolu izler ama gerçek izden sapmaz.
-function tripLines(trip) {
+// Her çizgi dokununca bilgi verir (info); withTrip: bilgide "Ayrıntılar ›" bağlantısı (yolculuk açılır).
+// GPS'i zayıf parça soluk çizilir (weak) — "burası yaklaşık".
+function tripLines(trip, withTrip = false) {
   const out = [], pts = trip.pts;
   trip.legs.forEach((leg) => {
     const mode = trip.overridden ? trip.mode : leg.mode;
     const at = (k) => (leg.snap ? leg.snap.pts[k - leg.a] : pts[k]);
+    const info = legInfo(trip, leg), weak = !!leg.gps && leg.gps.lvl === 'zayıf' && (!leg.snap || mode === 'walk' || mode === 'bike');
     let start = leg.a;
     for (let k = leg.a; k < leg.b; k++) {
       const dash = !!trip.dash[k];
@@ -42,7 +45,7 @@ function tripLines(trip) {
         piece.push(q);
       }
       if (!dash && piece.length > 2) piece = simplifyIdx(piece, DP_EPS).map((i) => piece[i]);
-      out.push({ mode, dash, coords: toCoords(piece) });
+      out.push({ mode, dash, weak, info, trip: withTrip ? trip.t0 : null, coords: toCoords(piece) });
       start = k + 1;
     }
   });
@@ -55,6 +58,26 @@ function tripLines(trip) {
   if (out.length && b) out[out.length - 1].coords.push({ latitude: b.lat, longitude: b.lon });
   return out;
 }
+const stName = (st) => (st && st.place ? st.place.name : null);
+// Çizgiye dokununca çıkan bilgi (satırlar). "!" ile başlayan satır uyarı renginde gösterilir.
+function legInfo(trip, leg) {
+  const mode = trip.overridden ? trip.mode : leg.mode;
+  const L = [MODE[mode].label + (leg.est ? ' (tahmini)' : '') + ' · ' + fmtKm(leg.dist) + ' · ' + fmtDur(leg.dur)];
+  L.push(fmtClock(leg.t0) + ' – ' + fmtClock(leg.t1) + ' · ort ' + fmtKmh(leg.avg) + (leg.max ? ' · tepe ' + fmtKmh(leg.max) : ''));
+  if ((mode === 'bus' || mode === 'car') && leg.stops) L.push(leg.stops + ' duruş (' + fmtDur(leg.stopMs) + ')');
+  if ((mode === 'bus' || mode === 'car') && leg.slowMs >= 60e3) L.push('trafikte yavaş (11 km/s altı): ' + fmtDur(leg.slowMs));
+  if ((mode === 'bus' || mode === 'car') && leg.atStops != null && leg.stopPts && leg.stopPts.length) L.push('otobüs durağında duruş: ' + leg.atStops + ' / ' + leg.stopPts.length);
+  const ws = leg.waits || [];
+  if (ws.length) L.push((ws.length > 1 ? ws.length + ' bekleme, toplam ' : 'bekleme ') + fmtDurS(ws.reduce((x, w) => x + (w.t1 - w.t0), 0)));
+  if (leg.gps) L.push((leg.gps.lvl === 'zayıf' ? '!' : '') + 'GPS ' + leg.gps.lvl + ' (±' + leg.gps.acc + ' m)' + (leg.gps.lvl === 'zayıf' ? ' — çizgi yaklaşık' : ''));
+  if (leg.snap) L.push('Yola oturtuldu (kendi sunucun)');
+  if (stName(trip.fromStay) || stName(trip.toStay)) L.push((stName(trip.fromStay) || '…') + ' → ' + (stName(trip.toStay) || '…'));
+  return L;
+}
+// Gerçek iz (turuncu kesik): yola oturtmadan önceki yerel düzeltilmiş çizgi — karşılaştırma katmanı
+const tripTrack = (trip) => ({ mode: 'track', coords: toCoords(trip.pts) });
+// Doğruluk halkaları: her kayıt noktasında telefonun bildirdiği ±hata
+const tripRings = (trip) => (trip.raw || []).filter((q) => !q.syn && q.acc >= 3).map((q) => ({ lat: q.lat, lon: q.lon, acc: q.acc }));
 
 // ---- Olaylar: sistemin yolculuktan "anladığı" anlar ----
 const VEH_OFF = { bus: 'Otobüsten indi', car: 'Arabadan indi', metro: 'Metrodan çıktı', bike: 'Bisikletten indi' };
@@ -83,7 +106,7 @@ function tripDots(trip) {
   const out = [];
   trip.legs.forEach((l, li) => {
     const mode = trip.overridden ? trip.mode : l.mode;
-    for (let k = l.a + (li ? 1 : 0); k <= l.b; k++) { const q = trip.raw ? trip.raw[k] : trip.pts[k]; if (q && !q.syn) out.push({ lat: q.lat, lon: q.lon, mode }); }
+    for (let k = l.a + (li ? 1 : 0); k <= l.b; k++) { const q = trip.raw ? trip.raw[k] : trip.pts[k]; if (q && !q.syn) out.push({ lat: q.lat, lon: q.lon, mode, weak: q.acc > 25 }); }
   });
   return out;
 }
@@ -115,11 +138,32 @@ function loadRange(from, to, running, hints, detect) {
   return analyze(store.getPoints(a, b, step), {
     from, to, saved: store.getPlaces(), overrides: store.getOverrides(), hints, detect, acts: store.getActivity(a, b),
     snapOf: snap.enabled() ? snap.lookup : null, // sunucudan gelmiş yol çizgileri (telefonda saklı)
+    busNear: snap.busNear(),                     // otobüs durakları (OSM) — otobüs/araba ayrımı
     now: running && b > now ? now : undefined, // "hâlâ orada" yalnız güncel aralıkta
   });
 }
 
+// Gün analizi önbelleği (Analiz sekmesi): her gün TAM çözünürlükte, Günlük ile aynı hesap. Eskiden dönem
+// 10 sn'de bir noktayla hesaplanıyordu; seyrek noktada otobüsün tıxacdaki duruşları kayboluyor, otobüs
+// "bisiklet + araba" sanılıyordu (30 Eyl). Bir gün ~5 ms; değişmeyen gün yeniden hesaplanmaz.
+const dayMemo = new Map();
+function dayData(d, running, hints, rev) {
+  const live = running && addDays(d, 1) > Date.now();
+  const k = rev + '|' + store.rangeVersion(addDays(d, -1), addDays(d, 2)) + '|' + (live ? Math.floor(Date.now() / 60e3) : '') + '|' + JSON.stringify(hints);
+  let v = dayMemo.get(d);
+  if (!v || v.k !== k) { v = { k, r: loadRange(d, addDays(d, 1), running, hints, false) }; dayMemo.set(d, v); }
+  return v.r;
+}
+
 // ===================== Küçük ortak parçalar =====================
+// Harita katmanları (turuncu iz / GPS noktaları / doğruluk halkası): seçim telefonda saklanır.
+function useLayers(key, def) {
+  const [ly, setLy] = useState(() => ({ ...def, ...(store.getKV(key, null) || {}) }));
+  const toggle = (k) => setLy((o) => { const n = { ...o, [k]: !o[k] }; store.setKV(key, n); return n; });
+  return [ly, toggle];
+}
+const LAYERS = [['track', 'Turuncu iz', '#FF8A00'], ['dots', 'GPS noktaları', C.dim], ['rings', 'Doğruluk halkası', C.faint]];
+
 function ModeIcon({ mode, size = 16 }) {
   return <MaterialCommunityIcons name={MODE[mode].icon} size={size} color={MODE[mode].color} />;
 }
@@ -202,15 +246,19 @@ const tripStops = (trip) => trip.legs.reduce((n, l) => n + (l.mode === 'car' || 
 // m:ss (canlı bekleme sayacı)
 const mmss = (ms) => Math.floor(ms / 60e3) + ':' + String(Math.floor(ms / 1000) % 60).padStart(2, '0');
 
-function HaritaTab({ data, day, setDay, trk, onToggle, onPlace, me, steps, lastAct }) {
+function HaritaTab({ data, day, setDay, trk, onToggle, onPlace, onTrip, me, steps, lastAct }) {
   const [centerTick, setCenterTick] = useState(0);   // konum düğmesine her basışta artar
-  const [showRaw, setShowRaw] = useState(false);     // ham (düzeltilmemiş) izi de göster
   const [follow, setFollow] = useState(false);       // takip: harita canlı konumla birlikte kayar
-  // Yolculuklar: düzeltilmiş + türe göre renkli. İstenirse altına ham iz (ince gri) eklenir.
-  const lines = useMemo(() => data.items.filter((i) => i.type === 'trip').flatMap(tripLines), [data]);
-  const legs = useMemo(() => (showRaw ? [...data.track.map((l) => ({ mode: 'raw', coords: toCoords(l) })), ...lines] : lines), [lines, showRaw, data]);
-  // Ham iz katmanı açıkken kayıt noktaları da tek tek (gri boncuk) görünür
-  const dots = useMemo(() => (showRaw ? data.track.flat().map((q) => ({ lat: q.lat, lon: q.lon })) : null), [showRaw, data]);
+  const [panel, setPanel] = useState(false);         // katman seçim kutusu açık mı
+  const [ly, toggleLy] = useLayers('layers_day', { track: false, dots: false, rings: false });
+  // Yolculuklar: düzeltilmiş + türe göre renkli (dokununca bilgi + "Ayrıntılar"). Katmanlar isteğe bağlı:
+  // turuncu gerçek iz (yola oturtmadan önceki), GPS noktaları, doğruluk halkaları.
+  const trips = useMemo(() => data.items.filter((i) => i.type === 'trip'), [data]);
+  const lines = useMemo(() => trips.flatMap((t) => tripLines(t, true)), [trips]);
+  const legs = useMemo(() => (ly.track ? [...trips.map(tripTrack), ...lines] : lines), [lines, ly.track, trips]);
+  const dots = useMemo(() => (ly.dots ? trips.flatMap(tripDots) : null), [ly.dots, trips]);
+  const rings = useMemo(() => (ly.rings ? trips.flatMap(tripRings) : null), [ly.rings, trips]);
+  const layerOn = ly.track || ly.dots || ly.rings;
   const stays = useMemo(() => data.places.map((p) => ({ key: p.id, lat: p.lat, lon: p.lon, kind: p.kind, place: p })), [data]);
   // Olay noktaları: araçtan indi / bindi, yolda beklemeler (dokununca saat + açıklama)
   const marks = useMemo(() => data.items.filter((i) => i.type === 'trip').flatMap(tripMarks), [data]);
@@ -235,8 +283,9 @@ function HaritaTab({ data, day, setDay, trk, onToggle, onPlace, me, steps, lastA
   }
   return (
     <View style={{ flex: 1 }}>
-      <MapPane legs={legs} stays={stays} marks={marks} dots={dots} fitKey={String(day)} me={pos} centerTick={centerTick} follow={follow && isToday}
-        onUserDrag={() => setFollow(false)} onStayPress={(m) => onPlace(m.place)} />
+      <MapPane legs={legs} stays={stays} marks={marks} dots={dots} rings={rings} fitKey={String(day)} me={pos} centerTick={centerTick} follow={follow && isToday}
+        onUserDrag={() => setFollow(false)} onStayPress={(m) => onPlace(m.place)}
+        onTripPress={(k) => { const t = trips.find((x) => x.t0 === k); if (t) onTrip(t); }} />
       <View style={[s.overlayTop, { top: TOP }]}>
         <DateBar day={day} setDay={setDay} />
         <View style={{ flexDirection: 'row', alignItems: 'flex-start' }}>
@@ -257,10 +306,22 @@ function HaritaTab({ data, day, setDay, trk, onToggle, onPlace, me, steps, lastA
               onPress={() => { setCenterTick(centerTick + 1); setFollow(true); }}>
               <Feather name="navigation" size={18} color={follow ? C.onAccent : C.accent} />
             </TouchableOpacity>
-            {/* Ham iz katmanı: GPS'in verdiği düzeltilmemiş noktaları ince gri çizgiyle gösterir/gizler */}
-            <TouchableOpacity style={[s.locBtn, { marginTop: 0 }, showRaw && { borderColor: C.accent }]} onPress={() => setShowRaw(!showRaw)}>
-              <Feather name="layers" size={18} color={showRaw ? C.accent : C.dim} />
+            {/* Katmanlar: turuncu gerçek iz / GPS noktaları / doğruluk halkası — açıp kapatılır, seçim saklanır */}
+            <TouchableOpacity style={[s.locBtn, { marginTop: 0 }, (panel || layerOn) && { borderColor: C.accent }]} onPress={() => setPanel(!panel)}>
+              <Feather name="layers" size={18} color={panel || layerOn ? C.accent : C.dim} />
             </TouchableOpacity>
+            {panel ? (
+              <View style={s.layerPanel}>
+                {LAYERS.map(([k, label, col]) => (
+                  <TouchableOpacity key={k} style={s.layerRow} onPress={() => toggleLy(k)}>
+                    <Feather name={ly[k] ? 'check-square' : 'square'} size={16} color={ly[k] ? C.accent : C.faint} />
+                    <View style={[s.layerSw, { backgroundColor: col }]} />
+                    <Text style={s.recTx}>{label}</Text>
+                  </TouchableOpacity>
+                ))}
+                <Text style={[s.dim, { fontSize: 10, marginTop: 2 }]}>Çizgiye dokun: parça bilgisi</Text>
+              </View>
+            ) : null}
           </View>
         </View>
       </View>
@@ -280,86 +341,124 @@ function HaritaTab({ data, day, setDay, trk, onToggle, onPlace, me, steps, lastA
         </View>
         <ModeRow modes={t.modes} />
         {/* Kayıt gerçekten işliyor mu? Nokta sayısı hareket ettikçe artmalı. */}
-        <Text style={s.dim}>{data.nPoints} nokta{data.lastT ? ' · son ' + fmtClockS(data.lastT) : ''} · v{VERSION}{showRaw ? ' · ham iz açık' : ''}</Text>
+        <Text style={s.dim}>{data.nPoints} nokta{data.lastT ? ' · son ' + fmtClockS(data.lastT) : ''} · v{VERSION}{layerOn ? ' · katman açık' : ''}</Text>
       </View>
     </View>
   );
 }
 
 // ===================== GÜNLÜK (zaman çizelgesi) =====================
+// Tasarım: üstte günün 24 saati tek şeritte (bir bakışta: nerede durdun, ne zaman hangi araçla gittin);
+// altında akış — solda saat, ortada ikonlu ray, sağda kısa bilgi. Ayrıntı tek dokunuşla (yolculuk sayfası).
+function DayStrip({ items, day }) {
+  const D = 86400e3, now = Date.now(), pct = (t) => Math.max(0, Math.min(100, ((t - day) / D) * 100));
+  const seg = [];
+  for (const it of items) {
+    if (it.type === 'stay') seg.push({ a: it.t0, b: it.t1, c: it.wait ? '#E3CF9A' : '#CBD3DB' });
+    else if (it.type === 'trip') for (const l of it.legs) seg.push({ a: l.t0, b: l.t1, c: MODE[it.overridden ? it.mode : l.mode].color });
+  }
+  return (
+    <View style={{ marginTop: 12 }}>
+      <View style={s.strip}>
+        {seg.map((x, i) => { const L = pct(x.a); return <View key={i} style={[s.stripSeg, { left: L + '%', width: Math.max(0.7, pct(x.b) - L) + '%', backgroundColor: x.c }]} />; })}
+        {now > day && now < day + D ? <View style={[s.stripNow, { left: pct(now) + '%' }]} /> : null}
+      </View>
+      <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 3 }}>
+        {['00', '06', '12', '18', '24'].map((h) => <Text key={h} style={s.axis}>{h}</Text>)}
+      </View>
+    </View>
+  );
+}
+// Yolculuğun parçaları, süreleriyle orantılı renkli çubuk
+function LegBar({ trip }) {
+  const legs = trip.overridden ? [{ mode: trip.mode, dur: trip.dur }] : trip.legs;
+  return <View style={s.legBar}>{legs.map((l, i) => <View key={i} style={{ flex: Math.max(l.dur, 1), backgroundColor: MODE[l.mode].color }} />)}</View>;
+}
+// Akış satırı: saat | ikonlu ray (satırlar arası çizgiyle bağlı) | içerik | sağda süre
+function TLRow({ time, icon, color, last, onPress, children, right }) {
+  return (
+    <TouchableOpacity activeOpacity={0.6} disabled={!onPress} onPress={onPress} style={s.tlRow}>
+      <Text style={s.tlTime}>{time}</Text>
+      <View style={s.tlRail}>
+        <View style={[s.tlDot, { borderColor: color }]}>{icon}</View>
+        {!last ? <View style={s.tlLine} /> : null}
+      </View>
+      <View style={s.tlBody}>{children}</View>
+      {right ? <View style={s.tlRight}>{right}</View> : null}
+    </TouchableOpacity>
+  );
+}
 function GunlukTab({ data, day, setDay, onTrip, onPlace, steps }) {
   const now = Date.now();
-  const dayPlaces = data.places.filter((p) => p.total > 0);
+  const dayPlaces = data.places.filter((p) => p.total > 0), maxPlace = Math.max(1, ...dayPlaces.map((p) => p.total));
   const items = useMemo(() => [...data.items].reverse(), [data]); // yeniden eskiye
   const t = data.totals;
   return (
     <View style={{ flex: 1, paddingTop: TOP }}>
       <View style={{ paddingHorizontal: 14 }}><DateBar day={day} setDay={setDay} /></View>
       <ScrollView contentContainerStyle={{ padding: 14, paddingBottom: 30 }}>
-        <Card title="GÜN ÖZETİ">
+        <Card>
           <View style={s.statRow}>
             <Stat label="Mesafe" value={fmtKm(t.dist)} />
             <Stat label="Yolda" value={fmtDur(t.moveMs)} />
             <Stat label="Yolculuk" value={String(t.trips)} />
             <Stat label="Adım" value={steps != null ? fmtInt(steps) : '—'} />
           </View>
+          <DayStrip items={data.items} day={day} />
+          <View style={{ marginTop: 10 }}><ModeRow modes={t.modes} /></View>
         </Card>
-        <Card title="GÜN AKIŞI — YENİDEN ESKİYE">
+        <Card title="GÜN AKIŞI">
           {items.length ? items.map((it, i) => {
+            const last = i === items.length - 1;
             if (it.type === 'stay') return (
-              <TouchableOpacity key={i} style={s.tl} onPress={() => onPlace(it.place)}>
-                <View style={s.tlIcon}><Feather name={it.wait ? 'clock' : KIND_ICON[it.place.kind] || 'map-pin'} size={14} color={C.text} /></View>
-                <View style={{ flex: 1 }}>
-                  <Text style={s.tx} numberOfLines={1}>{it.wait ? 'Durakta bekleme' : it.place.name}</Text>
-                  <Text style={s.dim}>{fmtClock(it.t0)} – {now - it.t1 < 60e3 ? 'şimdi' : fmtClock(it.t1)}{it.wait ? ' · ' + it.place.name : ''}</Text>
-                </View>
-                <Text style={s.num}>{fmtDur(it.t1 - it.t0)}</Text>
-              </TouchableOpacity>
+              <TLRow key={i} last={last} time={fmtClock(it.t0)} color={it.wait ? C.warn : C.accent} onPress={() => onPlace(it.place)}
+                icon={<Feather name={it.wait ? 'clock' : KIND_ICON[it.place.kind] || 'map-pin'} size={14} color={it.wait ? C.warn : C.accent} />}
+                right={<Text style={s.num}>{fmtDur(it.t1 - it.t0)}</Text>}>
+                <Text style={s.tlTitle} numberOfLines={1}>{it.wait ? 'Durakta bekleme' : it.place.name}</Text>
+                <Text style={s.dim}>{fmtClock(it.t0)} – {now - it.t1 < 60e3 ? 'şimdi' : fmtClock(it.t1)}{it.wait ? ' · ' + it.place.name : ''}</Text>
+              </TLRow>
             );
             if (it.type === 'gap') return (
-              <View key={i} style={s.tl}>
-                <View style={[s.tlIcon, { borderColor: C.line }]}><Feather name="slash" size={13} color={C.faint} /></View>
-                <Text style={[s.dim, { flex: 1 }]}>Veri yok · {fmtClock(it.t0)} – {fmtClock(it.t1)}</Text>
-              </View>
+              <TLRow key={i} last={last} time={fmtClock(it.t0)} color={C.line} icon={<Feather name="slash" size={13} color={C.faint} />}>
+                <Text style={s.dim}>Veri yok · {fmtClock(it.t0)} – {fmtClock(it.t1)}</Text>
+              </TLRow>
             );
-            // Birden çok parçalı yolculuk (ör. yürü → otobüs → yürü → otobüs): her parça kendi satırında
-            if (!it.overridden && it.legs.length > 1) return (
-              <TouchableOpacity key={i} style={s.group} onPress={() => onTrip(it)}>
-                <Text style={s.groupTx} numberOfLines={1}>{seqLabel(it)} · {fmtKm(it.dist)} · {fmtDur(it.dur)}</Text>
-                {[...it.legs].reverse().map((l, k) => (
-                  <View key={k} style={s.tl}>
-                    <View style={[s.tlIcon, { borderColor: MODE[l.mode].color }]}><ModeIcon mode={l.mode} size={15} /></View>
-                    <View style={{ flex: 1 }}>
-                      <Text style={s.tx}>{MODE[l.mode].label}{l.est ? ' (tahmini)' : ''} · {fmtKm(l.dist)}</Text>
-                      <Text style={s.dim}>{fmtClock(l.t0)} – {fmtClock(l.t1)} · ort {fmtKmh(l.avg)}{(l.mode === 'bus' || l.mode === 'car') && l.stops ? ' · ' + l.stops + ' duruş' : ''}{waitTxt(l)}</Text>
-                    </View>
-                    <Text style={s.num}>{fmtDur(l.dur)}</Text>
-                  </View>
-                ))}
-              </TouchableOpacity>
-            );
-            const st = tripStops(it);
+            // Yolculuk: nereden → nereye, parça simgeleri + mesafeleri, orantılı renk çubuğu, kısa not
+            const legsV = it.overridden ? [{ mode: it.mode, dist: it.dist }] : it.legs;
+            const waits = it.legs.reduce((n, l) => n + (l.waits ? l.waits.length : 0), 0), st = tripStops(it);
+            const weak = it.legs.some((l) => l.gps && l.gps.lvl === 'zayıf');
+            const title = stName(it.fromStay) && stName(it.toStay) ? stName(it.fromStay) + ' → ' + stName(it.toStay) : MODE[it.mode].label;
+            const note = [waits ? waits + ' bekleme' : '', st ? st + ' duruş' : '', weak ? 'GPS zayıf yer var' : ''].filter(Boolean).join(' · ');
             return (
-              <TouchableOpacity key={i} style={s.tl} onPress={() => onTrip(it)}>
-                <View style={[s.tlIcon, { borderColor: MODE[it.mode].color }]}><ModeIcon mode={it.mode} size={15} /></View>
-                <View style={{ flex: 1 }}>
-                  <Text style={s.tx}>{MODE[it.mode].label} · {fmtKm(it.dist)}</Text>
-                  <Text style={s.dim}>{fmtClock(it.t0)} – {fmtClock(it.t1)} · ort {fmtKmh(it.avg)}{st ? ' · ' + st + ' duruş' : ''}{!it.overridden && it.legs.length === 1 ? waitTxt(it.legs[0]) : ''}</Text>
-                  <LegStrip trip={it} />
+              <TLRow key={i} last={last} time={fmtClock(it.t0)} color={MODE[it.mode].color} onPress={() => onTrip(it)}
+                icon={<ModeIcon mode={it.mode} size={15} />}
+                right={<View style={{ alignItems: 'flex-end' }}><Text style={s.num}>{fmtDur(it.dur)}</Text><Feather name="chevron-right" size={15} color={C.faint} /></View>}>
+                <Text style={s.tlTitle} numberOfLines={1}>{title}</Text>
+                <View style={s.legChips}>
+                  {legsV.map((l, k) => (
+                    <View key={k} style={s.legChip}>
+                      {k ? <Feather name="chevron-right" size={11} color={C.faint} /> : null}
+                      <ModeIcon mode={l.mode} size={13} />
+                      <Text style={s.legChipTx}>{fmtKm(l.dist)}</Text>
+                    </View>
+                  ))}
                 </View>
-                <Text style={s.num}>{fmtDur(it.dur)}</Text>
-                <Feather name="chevron-right" size={16} color={C.faint} />
-              </TouchableOpacity>
+                <LegBar trip={it} />
+                <Text style={[s.dim, { marginTop: 4 }]}>{fmtClock(it.t0)} – {fmtClock(it.t1)} · {fmtKm(it.dist)} · ort {fmtKmh(it.avg)}{note ? ' · ' + note : ''}</Text>
+              </TLRow>
             );
           }) : <Text style={s.dim}>Bu gün için kayıt yok</Text>}
         </Card>
         <Card title="NEREDE NE KADAR">
           {dayPlaces.length ? dayPlaces.map((p) => (
-            <TouchableOpacity key={p.id} style={s.row} onPress={() => onPlace(p)}>
-              <Feather name={KIND_ICON[p.kind] || 'map-pin'} size={15} color={C.accent} />
-              <Text style={[s.tx, { flex: 1 }]} numberOfLines={1}>{p.name}</Text>
-              <Text style={s.dim}>{p.visits > 1 ? p.visits + ' kez · ' : ''}</Text>
-              <Text style={s.num}>{fmtDur(p.total)}</Text>
+            <TouchableOpacity key={p.id} style={{ paddingVertical: 6 }} onPress={() => onPlace(p)}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                <Feather name={KIND_ICON[p.kind] || 'map-pin'} size={15} color={C.accent} />
+                <Text style={[s.tx, { flex: 1 }]} numberOfLines={1}>{p.name}</Text>
+                <Text style={s.dim}>{p.visits > 1 ? p.visits + ' kez' : ''}</Text>
+                <Text style={[s.num, { minWidth: 70, textAlign: 'right' }]}>{fmtDur(p.total)}</Text>
+              </View>
+              <View style={s.barBg}><View style={[s.barFg, { width: (p.total / maxPlace) * 100 + '%' }]} /></View>
             </TouchableOpacity>
           )) : <Text style={s.dim}>Bu gün için kayıt yok</Text>}
         </Card>
@@ -405,16 +504,44 @@ function AnalizTab({ trk, hints, rev, onPlace, onTrip, onSnap }) {
   const [open, setOpen] = useState(null); // açık rutin
   const [w, setW] = useState(0);
   const to = addDays(dayStart(Date.now()), 1 - off * span), from = addDays(to, -span);
-  const data = useMemo(() => loadRange(from, to, trk.running, hints, true), [from, to, rev, trk.running]);
+  // Yerler + rutinler tüm dönemden (seyrek nokta yeter); yolculuklar, türler ve gün çubukları gün gün tam
+  // çözünürlükte (dayData) — Günlük ile birebir aynı sonuç.
+  const data = useMemo(() => {
+    const base = loadRange(from, to, trk.running, hints, true);
+    // Günlerin ev/iş ipucu: dönemin kendi bulduğu ev/iş (yer adları dönemle tutarlı olsun)
+    const pick = (k) => { const x = base.places.find((q) => q.kind === k); return x ? { lat: x.lat, lon: x.lon } : (hints && hints[k]) || null; };
+    const h2 = { home: pick('home'), work: pick('work') }, ds = [];
+    for (let d = from; d < to; d = addDays(d, 1)) ds.push(dayData(d, trk.running, h2, rev));
+    const trips = ds.flatMap((x) => x.items.filter((i) => i.type === 'trip'));
+    const totals = { ...base.totals, modes: Object.fromEntries(MODES.map((m) => [m, { dist: 0, dur: 0 }])), dist: 0, moveMs: 0, trips: 0 };
+    ds.forEach((x, i) => {
+      const D = base.days[i];
+      if (D) { D.modes = x.totals.modes; D.dist = x.totals.dist; D.moveMs = x.totals.moveMs; }
+      totals.dist += x.totals.dist; totals.moveMs += x.totals.moveMs; totals.trips += x.totals.trips;
+      for (const m of MODES) { totals.modes[m].dist += x.totals.modes[m].dist; totals.modes[m].dur += x.totals.modes[m].dur; }
+    });
+    // Rutinin türü: o yolculukların tam çözünürlükteki türü (en çok tekrarlanan)
+    for (const r of base.routines) {
+      const cnt = {};
+      for (const j of r.list) {
+        const md = {};
+        for (const t of trips) if (t.t0 < j.arr && t.t1 > j.dep) md[t.mode] = (md[t.mode] || 0) + t.dist;
+        const top = Object.keys(md).sort((a, b) => md[b] - md[a])[0];
+        if (top) cnt[top] = (cnt[top] || 0) + 1;
+      }
+      r.mode = Object.keys(cnt).sort((a, b) => cnt[b] - cnt[a])[0] || r.mode;
+    }
+    return { ...base, trips, totals };
+  }, [from, to, rev, trk.running]);
   // Dönemin bitmiş parçalarını sunucuya sor (önbellekte olmayanlar); yeni sonuç gelince yenile
-  useEffect(() => { snap.fill(data.items).then((got) => got && onSnap()); }, [data]);
+  useEffect(() => { snap.fill(data.trips).then((got) => got && onSnap()); }, [data]);
   const t = data.totals, maxPlace = Math.max(1, ...data.places.map((p) => p.total));
   // Harita: dönemdeki tüm yolculuklar (türe göre renkli) + gidilen yerler.
-  const legs = useMemo(() => data.items.filter((i) => i.type === 'trip').flatMap(tripLines), [data]);
+  const legs = useMemo(() => data.trips.flatMap((x) => tripLines(x, true)), [data]);
   const stays = useMemo(() => data.places.map((p) => ({ key: p.id, lat: p.lat, lon: p.lon, kind: p.kind, place: p })), [data]);
   // Yolculuk listesi: nereden → nereye, en yeni üstte.
-  const trips = useMemo(() => data.items.filter((i) => i.type === 'trip').reverse(), [data]);
-  const stName = (st) => (st && st.place ? st.place.name : '…');
+  const trips = useMemo(() => [...data.trips].reverse(), [data]);
+  const nm = (st) => stName(st) || '…';
   return (
     <View style={{ flex: 1, paddingTop: TOP }}>
       <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, gap: 8 }}>
@@ -426,7 +553,8 @@ function AnalizTab({ trk, hints, rev, onPlace, onTrip, onSnap }) {
         <TouchableOpacity style={s.iconBtn} disabled={!off} onPress={() => setOff(off - 1)}><Feather name="chevron-right" size={20} color={off ? C.text : C.faint} /></TouchableOpacity>
       </View>
       <View style={s.anMap}>
-        <MapPane legs={legs} stays={stays} fitKey={'an' + from + '-' + to} pad={{ top: 24, right: 24, bottom: 24, left: 24 }} onStayPress={(m) => onPlace(m.place)} />
+        <MapPane legs={legs} stays={stays} fitKey={'an' + from + '-' + to} pad={{ top: 24, right: 24, bottom: 24, left: 24 }} onStayPress={(m) => onPlace(m.place)}
+          onTripPress={(k) => { const x = trips.find((y) => y.t0 === k); if (x) onTrip(x); }} />
       </View>
       <ScrollView contentContainerStyle={{ padding: 14, paddingBottom: 30 }}>
         <Card title="YOLCULUKLAR">
@@ -434,7 +562,7 @@ function AnalizTab({ trk, hints, rev, onPlace, onTrip, onSnap }) {
             <TouchableOpacity key={i} style={s.tl} onPress={() => onTrip(trip)}>
               <View style={[s.tlIcon, { borderColor: MODE[trip.mode].color }]}><ModeIcon mode={trip.mode} size={15} /></View>
               <View style={{ flex: 1 }}>
-                <Text style={s.tx} numberOfLines={1}>{stName(trip.fromStay)} → {stName(trip.toStay)}</Text>
+                <Text style={s.tx} numberOfLines={1}>{nm(trip.fromStay)} → {nm(trip.toStay)}</Text>
                 <Text style={s.dim}>{fmtDay(trip.t0)} · {fmtClock(trip.t0)} – {fmtClock(trip.t1)} · {fmtKm(trip.dist)}</Text>
                 <LegStrip trip={trip} />
               </View>
@@ -521,6 +649,15 @@ function Rt({ label, range, avg }) {
 }
 
 // ===================== AYARLAR =====================
+const PROFS = [['maks', 'Maksimum'], ['birebir', 'Birebir'], ['hassas', 'Dengeli'], ['pil', 'Pil dostu']];
+const PROF_M = { maks: [1, 4], birebir: [2, 8], hassas: [12, 12], pil: [30, 30] }; // [hareket halinde, yavaşken] m (tracker.js ile aynı)
+const PROF_TXT = {
+  maks: 'Navigasyon doğruluğu: GPS hareket algılayıcısıyla birlikte çalışır. En ayrıntılı çizgi; pil en çok bu modda gider — uzun günlerde şarj önerilir.',
+  birebir: 'GPS’in en yüksek doğruluğu. Önerilen: ayrıntı ile pil arasında denge.',
+  hassas: 'Tür ayrımı için yeterli; virajlar hafif köşeli çizilir, pil daha az gider.',
+  pil: 'Kaba konum (GPS yerine Wi-Fi/baz). Pil en az bu modda gider; çizgi yaklaşık olur.',
+};
+const STILLS = [[0, 'Hiç'], [60, '1 dk'], [120, '2 dk'], [300, '5 dk']];
 function AyarlarTab({ trk, onToggle, profile, setProfile, onWipe, rev, onSnapReset }) {
   const st = useMemo(() => store.pointStats(), [rev, trk]);
   const [snapOn, setSnapOn] = useState(() => snap.enabled());
@@ -529,7 +666,7 @@ function AyarlarTab({ trk, onToggle, profile, setProfile, onWipe, rev, onSnapRes
   const [dg, setDg] = useState({});
   const [testing, setTesting] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [smart, setSmartS] = useState(() => store.getKV('smart', true));
+  const [still, setStillS] = useState(() => tracker.stillSec());
   useEffect(() => { let on = true; tracker.diag(false).then((d) => on && setDg((o) => ({ ...d, test: o.test }))); return () => { on = false; }; }, [rev, trk]);
   const runTest = async () => { setTesting(true); const d = await tracker.diag(true); setDg(d); setTesting(false); };
   const doExport = async (days) => {
@@ -568,20 +705,25 @@ function AyarlarTab({ trk, onToggle, profile, setProfile, onWipe, rev, onSnapRes
         </View>
         <Text style={s.dim}>Kayıt sürerken telefon kilitliyken de yol kaydedilir; iOS bunu durum çubuğunda mavi konum göstergesiyle belli eder. Uygulamayı yukarı kaydırıp kapatma: iOS o zaman kaydı durdurur.</Text>
       </Card>
-      <Card title="HASSASİYET">
-        <View style={{ flexDirection: 'row', gap: 8 }}>
-          <Chip label="Birebir" active={profile === 'birebir'} onPress={() => setProfile('birebir')} />
-          <Chip label="Dengeli" active={profile === 'hassas'} onPress={() => setProfile('hassas')} />
-          <Chip label="Pil dostu" active={profile === 'pil'} onPress={() => setProfile('pil')} />
+      <Card title="GPS HASSASİYETİ">
+        {/* Kayıt ne kadar ayrıntılı: GPS doğruluğu + hareket halinde / yavaşken kaç metrede bir nokta */}
+        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+          {PROFS.map(([k, label]) => <Chip key={k} label={label} active={profile === k} onPress={() => setProfile(k)} />)}
         </View>
-        <Text style={[s.dim, { marginTop: 8 }]}>{profile === 'birebir' ? 'Hareket halinde her ~2 m’de bir nokta, GPS’in en yüksek doğruluğu; yavaşlayınca ve dururken seyrek. Yol haritaya en doğru bu modda çizilir.' : profile === 'hassas' ? 'Her ~12 m’de bir nokta. Tür ayrımı için yeterli; virajlar hafif köşeli çizilir.' : 'Kaba konum (GPS yerine Wi-Fi/baz), ~30 m’de bir nokta. Pil en az bu modda gider; çizgi yaklaşık olur.'}</Text>
-        {/* Akıllı pil tasarrufu: dururken GPS'i kıs, kıpırdayınca geri aç */}
-        <View style={[s.row, { marginTop: 6 }]}>
-          <Feather name="battery-charging" size={15} color={smart ? C.ok : C.dim} />
-          <Text style={[s.tx, { flex: 1 }]}>Akıllı pil tasarrufu</Text>
-          <Chip label={smart ? 'Açık' : 'Kapalı'} active={smart} onPress={() => { tracker.setSmart(!smart); setSmartS(!smart); }} />
+        <Text style={[s.dim, { marginTop: 8 }]}>{PROF_TXT[profile] || PROF_TXT.birebir}</Text>
+        {/* Durunca GPS'i kıs: bu süre yerinden kıpırdamazsan kaba konuma in (pil), kıpırdayınca anında geri dön */}
+        <View style={[s.row, { marginTop: 8 }]}>
+          <Feather name="battery-charging" size={15} color={still ? C.ok : C.dim} />
+          <Text style={[s.tx, { flex: 1 }]}>Durunca GPS’i kıs</Text>
         </View>
-        <Text style={s.dim}>2 dakika yerinden kıpırdamazsan GPS kısılır (kayıt sürer); yürümeye ya da araca binmeye başlayınca kendiliğinden tam doğruluğa döner. Işıkta/durakta kısa beklemek GPS’i kısmaz. Şu an: {dg.power === 'low' ? 'kısık (duruyorsun)' : 'tam doğruluk'}.</Text>
+        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+          {STILLS.map(([sec, label]) => <Chip key={sec} label={label} active={still === sec} onPress={() => { tracker.setStill(sec); setStillS(sec); }} />)}
+        </View>
+        <Text style={[s.dim, { marginTop: 8 }]}>{still ? (STILLS.find((x) => x[0] === still) || [0, still + ' sn'])[1] + ' yerinden kıpırdamazsan GPS kısılır (kayıt sürer, Wi-Fi/baz ~100 m); yürümeye ya da araca binmeye başlayınca anında tam doğruluğa döner. Işıkta/durakta kısa beklemek GPS’i kısmaz.' : 'GPS hep tam açık: en eksiksiz kayıt (duraktan çıkışın ilk metreleri bile), en çok pil.'}</Text>
+        <View style={s.infoBox}>
+          <Text style={s.tx}>Şu anki düzen: hareket halinde ~{(PROF_M[profile] || PROF_M.birebir)[0]} m’de, yavaşken ~{(PROF_M[profile] || PROF_M.birebir)[1]} m’de bir nokta; {still && profile !== 'pil' ? (STILLS.find((x) => x[0] === still) || [0, still + ' sn'])[1] + ' durunca GPS kısılır' : 'GPS hiç kısılmaz'}.</Text>
+          <Text style={[s.dim, { marginTop: 3 }]}>GPS şu an: {dg.power === 'low' ? 'kısık (duruyorsun)' : 'tam doğruluk'}. En doğru çizgi için: Maksimum ya da Birebir + «Hiç» — telefonu cepte değil, üst tarafı açıkta taşımak da GPS’i iyileştirir.</Text>
+        </View>
       </Card>
       <Card title="YOLA OTURTMA">
         {snap.available() ? (
@@ -592,6 +734,7 @@ function AyarlarTab({ trk, onToggle, profile, setProfile, onWipe, rev, onSnapRes
               <Chip label={snapOn ? 'Açık' : 'Kapalı'} active={snapOn} onPress={() => { snap.setEnabled(!snapOn); setSnapOn(!snapOn); onSnapReset(); }} />
             </View>
             <Text style={s.dim}>Bitmiş yolculukların GPS noktaları kendi sunucuna ({snap.SNAP_HOST}) gider; sunucu onları Azerbaycan yol haritasına oturtup çizgiyi geri yollar, hiçbir şey saklamaz. Çizgi gerçek izinden en çok ~12 m sapar: yol yakınsa yola oturur, değilse iz olduğu gibi kalır. Metro ve tahmini parçalar gönderilmez.</Text>
+            <Text style={[s.dim, { marginTop: 6 }]}>Otobüs durağı listesi: {snap.stopsInfo() ? snap.stopsInfo().n + ' durak (OSM, ' + snap.stopsInfo().v + ')' : 'henüz inmedi'} — aracın durduğu yerler durağa denk geliyorsa otobüs sayılır.</Text>
             <Text style={[s.dim, { marginTop: 6 }]}>Oturan parça: {sst.ok} · oturmayan: {sst.fail} · son soru: {snap.status.at ? fmtClock(snap.status.at) : '—'}{snap.status.err ? ' · hata: ' + snap.status.err : ''}</Text>
             <TouchableOpacity style={[s.btn, { marginTop: 8, alignSelf: 'flex-start' }]} onPress={() => { snap.reset(); onSnapReset(); }}>
               <Text style={s.btnTx}>Yeniden oturt</Text>
@@ -643,8 +786,8 @@ function AyarlarTab({ trk, onToggle, profile, setProfile, onWipe, rev, onSnapRes
 
 // ===================== Yolculuk ayrıntısı =====================
 // Hız grafiği: yatay zaman, dikey hız; her parça kendi türünün renginde. Araçta duruşlar (ışık/durak)
-// grafikte sıfıra inen çukurlar olarak görünür.
-function SpeedChart({ trip, width }) {
+// grafikte sıfıra inen çukurlar olarak görünür. Grafiğe dokunup kaydırınca o an haritada gösterilir (onPick).
+function SpeedChart({ trip, width, pick, onPick }) {
   const H = 96, pts = trip.pts, n = pts.length;
   // kayıt boşluğu / GPS'siz parçanın uçlarında anlık hız bilinmez
   const vAt = (k) => (trip.dash[k] || (k > 0 && trip.dash[k - 1]) ? null : pts[k].v);
@@ -660,13 +803,21 @@ function SpeedChart({ trip, width }) {
     }
     return <Polyline key={li} points={out.join(' ')} fill="none" stroke={MODE[trip.overridden ? trip.mode : l.mode].color} strokeWidth={2} strokeLinejoin="round" />;
   });
+  const handle = (e) => onPick && onPick(trip.t0 + Math.max(0, Math.min(1, e.nativeEvent.locationX / width)) * trip.dur);
   return (
     <View>
-      <Svg width={width} height={H}>
-        <Line x1={0} y1={H - 4} x2={width} y2={H - 4} stroke={C.line} strokeWidth={1} />
-        <Line x1={0} y1={Y(maxV)} x2={width} y2={Y(maxV)} stroke={C.line} strokeWidth={1} strokeDasharray="3 4" />
-        {lines}
-      </Svg>
+      {/* dokunma bu kutuda yakalanır; çizim dokunmayı almaz (locationX kutuya göre gelsin) */}
+      <View onStartShouldSetResponder={() => true} onMoveShouldSetResponder={() => true} onResponderTerminationRequest={() => false}
+        onResponderGrant={handle} onResponderMove={handle}>
+        <View pointerEvents="none">
+          <Svg width={width} height={H}>
+            <Line x1={0} y1={H - 4} x2={width} y2={H - 4} stroke={C.line} strokeWidth={1} />
+            <Line x1={0} y1={Y(maxV)} x2={width} y2={Y(maxV)} stroke={C.line} strokeWidth={1} strokeDasharray="3 4" />
+            {lines}
+            {pick ? <Line x1={X(pick)} y1={0} x2={X(pick)} y2={H} stroke={C.text} strokeWidth={1.2} /> : null}
+          </Svg>
+        </View>
+      </View>
       <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
         <Text style={s.axis}>{fmtClock(trip.t0)}</Text>
         <Text style={s.axis}>üst çizgi: {fmtKmh(maxV)}</Text>
@@ -678,11 +829,25 @@ function SpeedChart({ trip, width }) {
 
 function TripModal({ trip, onClose, onMode }) {
   const [w, setW] = useState(0);
-  // Ayrıntı haritası: çizgi + kayıt noktaları (boncuk) + olay noktaları; yolculuk değişince bir kez hesaplanır
-  const view = useMemo(() => (trip ? { legs: tripLines(trip), marks: tripMarks(trip), dots: tripDots(trip) } : null), [trip]);
+  const [pick, setPick] = useState(null); // hız grafiğinde seçilen an (ms)
+  const [ly, toggleLy] = useLayers('layers_trip', { track: false, dots: true, rings: false });
+  // Ayrıntı haritası: çizgi + katmanlar (turuncu iz, GPS noktaları, doğruluk halkası) + olay noktaları
+  const base = useMemo(() => (trip ? { legs: tripLines(trip), marks: tripMarks(trip) } : null), [trip]);
+  const legs = useMemo(() => (!trip ? [] : ly.track ? [tripTrack(trip), ...base.legs] : base.legs), [trip, base, ly.track]);
+  const dots = useMemo(() => (trip && ly.dots ? tripDots(trip) : null), [trip, ly.dots]);
+  const rings = useMemo(() => (trip && ly.rings ? tripRings(trip) : null), [trip, ly.rings]);
+  // Seçilen anın konumu (yola oturtulmuşsa birleşik çizgideki yeri) + etiketi: saat · hız · tür
+  const cursor = useMemo(() => {
+    if (!trip || pick == null) return null;
+    let k = 0;
+    for (let i = 1; i < trip.pts.length; i++) if (Math.abs(trip.pts[i].t - pick) < Math.abs(trip.pts[k].t - pick)) k = i;
+    const leg = trip.legs.find((l) => k >= l.a && k <= l.b) || trip.legs[0], q = leg.snap ? leg.snap.pts[k - leg.a] : trip.pts[k];
+    return { lat: q.lat, lon: q.lon, label: fmtClockS(trip.pts[k].t) + ' · ' + fmtKmh(trip.pts[k].v || 0) + ' · ' + MODE[trip.overridden ? trip.mode : leg.mode].label };
+  }, [trip, pick]);
   const [steps, setSteps] = useState({}); // parça indeksi -> adım (yalnız yaya parçaları)
   // Yaya parçalarının adımını telefonun adımsayarından sor (son 7 gün için var).
   useEffect(() => {
+    setPick(null);
     if (!trip) return;
     let on = true; setSteps({});
     trip.legs.forEach((l, i) => {
@@ -692,8 +857,8 @@ function TripModal({ trip, onClose, onMode }) {
     return () => { on = false; };
   }, [trip]);
   if (!trip) return null;
-  const stName = (st) => (st && st.place ? st.place.name : null);
   const title = stName(trip.fromStay) && stName(trip.toStay) ? stName(trip.fromStay) + ' → ' + stName(trip.toStay) : MODE[trip.mode].label + ' · ' + fmtKm(trip.dist);
+  const share = () => extras.exportGpx(trip, title + ' · ' + fmtDay(trip.t0)).catch((e) => Alert.alert('Paylaşılamadı', String((e && e.message) || e)));
   return (
     <Modal visible animationType="slide" onRequestClose={onClose}>
       <View style={{ flex: 1, backgroundColor: C.bg, paddingTop: TOP }}>
@@ -703,11 +868,16 @@ function TripModal({ trip, onClose, onMode }) {
             <Text style={s.h2} numberOfLines={1}>{title}</Text>
             <Text style={s.dim}>{fmtDay(trip.t0)} · {fmtClock(trip.t0)} – {fmtClock(trip.t1)}</Text>
           </View>
+          {/* GPX: iz dosyası olarak paylaş (her harita/spor uygulaması açar) */}
+          <TouchableOpacity style={s.iconBtn} onPress={share}><Feather name="share" size={19} color={C.accent} /></TouchableOpacity>
         </View>
         <View style={{ height: 250 }}>
-          <MapPane legs={view.legs} stays={[]} marks={view.marks} dots={view.dots} fitKey={'trip' + trip.t0} pad={{ top: 40, right: 40, bottom: 40, left: 40 }} />
+          <MapPane legs={legs} stays={[]} marks={base.marks} dots={dots} rings={rings} cursor={cursor} fitKey={'trip' + trip.t0} pad={{ top: 40, right: 40, bottom: 40, left: 40 }} />
         </View>
-        <ScrollView contentContainerStyle={{ padding: 14, paddingBottom: 40 }}>
+        <View style={s.layerBar}>
+          {LAYERS.map(([k, label]) => <Chip key={k} label={label} active={!!ly[k]} onPress={() => toggleLy(k)} />)}
+        </View>
+        <ScrollView contentContainerStyle={{ padding: 14, paddingTop: 4, paddingBottom: 40 }}>
           <Card>
             <View style={s.statRow}>
               <Stat label="Mesafe" value={fmtKm(trip.dist)} />
@@ -715,6 +885,7 @@ function TripModal({ trip, onClose, onMode }) {
               <Stat label="Ort. hız" value={fmtKmh(trip.avg)} />
               <Stat label="Tepe hız" value={fmtKmh(trip.max)} />
             </View>
+            <LegBar trip={trip} />
           </Card>
           <Card title="OLAYLAR — SİSTEM NE ANLADI">
             {tripEvents(trip).map((e, i) => (
@@ -725,8 +896,8 @@ function TripModal({ trip, onClose, onMode }) {
               </View>
             ))}
           </Card>
-          <Card title="HIZ">
-            <View onLayout={(e) => setW(e.nativeEvent.layout.width)}>{w > 0 ? <SpeedChart trip={trip} width={w} /> : null}</View>
+          <Card title="HIZ" right={<Text style={[s.dim, { fontSize: 11 }]}>{cursor ? cursor.label : 'dokun: haritada o an'}</Text>}>
+            <View onLayout={(e) => setW(e.nativeEvent.layout.width)}>{w > 0 ? <SpeedChart trip={trip} width={w} pick={pick} onPick={setPick} /> : null}</View>
           </Card>
           <Card title="PARÇALAR">
             {trip.legs.map((l, i) => (
@@ -740,11 +911,14 @@ function TripModal({ trip, onClose, onMode }) {
                 <Text style={[s.dim, { marginLeft: 24 }]}>
                   {fmtClock(l.t0)} – {fmtClock(l.t1)} · ort {fmtKmh(l.avg)}
                   {(l.mode === 'car' || l.mode === 'bus') && l.stops ? ' · ' + l.stops + ' duruş (' + fmtDur(l.stopMs) + ')' : ''}
+                  {(l.mode === 'car' || l.mode === 'bus') && l.slowMs >= 60e3 ? ' · trafikte yavaş ' + fmtDur(l.slowMs) : ''}
+                  {(l.mode === 'car' || l.mode === 'bus') && l.atStops != null && l.stopPts.length ? ' · durakta duruş ' + l.atStops + '/' + l.stopPts.length : ''}
                   {steps[i] != null ? ' · ' + fmtInt(steps[i]) + ' adım' : ''}{waitTxt(l)}
                 </Text>
+                {l.gps ? <Text style={[s.dim, { marginLeft: 24, color: l.gps.lvl === 'zayıf' ? C.warn : C.dim }]}>GPS {l.gps.lvl} · ±{l.gps.acc} m · {Math.round(l.gps.gap)} sn’de bir nokta{l.gps.lvl === 'zayıf' ? ' — bu parçanın çizgisi yaklaşık' : ''}{l.snap ? ' · yola oturtuldu' : ''}</Text> : null}
               </View>
             ))}
-            <Text style={[s.dim, { marginTop: 4 }]}>Tür; telefonun hareket algılayıcısından (yürüyor / araçta) ve hızdan çıkarılır. Otobüs: durak durak gidiş + öncesinde ya da sonrasında yürüyüş. Araçtan inip en az 1 dk yürüme hızında gidersen ayrı yaya parçası olur. Kesikli çizgi: GPS’siz ya da kayıt boşluğu (tahmini).{trip.legs.some((l) => l.snap) ? ' Yola oturtulmuş parçalar yolu izler (gerçek izden en çok ~12 m); mesafe o çizgiden ölçülür.' : ''}</Text>
+            <Text style={[s.dim, { marginTop: 4 }]}>Tür; telefonun hareket algılayıcısından (yürüyor / araçta) ve hızdan çıkarılır. Otobüs: durak durak gidiş + öncesinde ya da sonrasında yürüyüş. Araçtan inip en az 1 dk yürüme hızında gidersen ayrı yaya parçası olur. Kesikli çizgi: GPS’siz ya da kayıt boşluğu (tahmini); soluk çizgi: GPS zayıf. Beyaz oklar gidiş yönünü gösterir.{trip.legs.some((l) => l.snap) ? ' Yola oturtulmuş parçalar yolu izler (gerçek izden en çok ~12 m); mesafe o çizgiden ölçülür — turuncu iz katmanıyla karşılaştırabilirsin.' : ''}</Text>
           </Card>
           <Card title="TÜR YANLIŞSA DÜZELT">
             <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
@@ -818,6 +992,8 @@ export default function App() {
       if (store.getKV('rec', false)) { st = await tracker.start(profile); store.setKV('applied', profile); }
       setTrk(st);
     })();
+    // Otobüs durak listesi (yoksa / eskiyse) sunucudan bir kez indirilir; gelince analiz yenilenir
+    snap.fetchStops().then((got) => got && bump());
     const to = addDays(dayStart(Date.now()), 1);
     const r = loadRange(addDays(to, -14), to, false, null, true);
     const pick = (k) => { const p = r.places.find((x) => x.kind === k && x.auto); return p ? { lat: p.lat, lon: p.lon } : null; };
@@ -918,7 +1094,7 @@ export default function App() {
     <View style={{ flex: 1, backgroundColor: C.bg }}>
       <StatusBar style="dark" />
       <View style={{ flex: 1 }}>
-        {tab === 'harita' ? <HaritaTab data={data} day={day} setDay={setDay} trk={trk} onToggle={onToggle} onPlace={setPlace} me={me} steps={steps} lastAct={lastAct} /> : null}
+        {tab === 'harita' ? <HaritaTab data={data} day={day} setDay={setDay} trk={trk} onToggle={onToggle} onPlace={setPlace} onTrip={setTrip} me={me} steps={steps} lastAct={lastAct} /> : null}
         {tab === 'gunluk' ? <GunlukTab data={data} day={day} setDay={setDay} onTrip={setTrip} onPlace={setPlace} steps={steps} /> : null}
         {tab === 'analiz' ? <AnalizTab trk={trk} hints={hints} rev={rev} onPlace={setPlace} onTrip={setTrip} onSnap={bump} /> : null}
         {tab === 'ayarlar' ? <AyarlarTab trk={trk} onToggle={onToggle} profile={profile} setProfile={setProfile} onWipe={onWipe} rev={rev + tick} onSnapReset={bump} /> : null}
@@ -984,5 +1160,27 @@ const s = StyleSheet.create({
   modalHead: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 8, paddingBottom: 8 },
   sheetBg: { flex: 1, backgroundColor: 'rgba(0,0,0,0.35)', justifyContent: 'center', padding: 20 },
   sheet: { backgroundColor: C.panel, borderWidth: 1, borderColor: C.line, borderRadius: 12, padding: 16 },
+  // Günlük: 24 saat şeridi + akış rayı
+  strip: { height: 14, borderRadius: 7, backgroundColor: C.panel2, overflow: 'hidden' },
+  stripSeg: { position: 'absolute', top: 0, bottom: 0 },
+  stripNow: { position: 'absolute', top: 0, bottom: 0, width: 2, backgroundColor: C.text },
+  legBar: { flexDirection: 'row', height: 5, borderRadius: 3, overflow: 'hidden', marginTop: 6, gap: 2 },
+  legChips: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', columnGap: 4, rowGap: 2, marginTop: 3 },
+  legChip: { flexDirection: 'row', alignItems: 'center', gap: 3 },
+  legChipTx: { color: C.text, fontSize: 12, fontWeight: '600', ...mono },
+  tlRow: { flexDirection: 'row', alignItems: 'stretch' },
+  tlTime: { width: 42, color: C.dim, fontSize: 12, fontWeight: '600', paddingTop: 9, ...mono },
+  tlRail: { width: 32, alignItems: 'center' },
+  tlDot: { width: 30, height: 30, borderRadius: 15, borderWidth: 1.5, alignItems: 'center', justifyContent: 'center', backgroundColor: C.panel, marginTop: 3 },
+  tlLine: { flex: 1, width: 2, backgroundColor: C.line, marginTop: 2 },
+  tlBody: { flex: 1, paddingLeft: 8, paddingTop: 5, paddingBottom: 14 },
+  tlTitle: { color: C.text, fontSize: 14, fontWeight: '600' },
+  tlRight: { paddingTop: 8, paddingLeft: 6 },
+  // Harita katmanları
+  layerPanel: { backgroundColor: C.panel, borderWidth: 1, borderColor: C.line, borderRadius: 10, padding: 8, gap: 6, alignSelf: 'flex-end' },
+  layerRow: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingVertical: 2 },
+  layerSw: { width: 14, height: 4, borderRadius: 2 },
+  layerBar: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, paddingHorizontal: 14, paddingVertical: 8 },
+  infoBox: { marginTop: 10, padding: 10, borderRadius: 8, backgroundColor: C.panel2 },
   input: { marginTop: 6, borderWidth: 1, borderColor: C.line, borderRadius: 8, paddingHorizontal: 10, paddingVertical: 9, color: C.text, fontSize: 14, backgroundColor: C.bg },
 });

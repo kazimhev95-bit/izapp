@@ -29,6 +29,11 @@ echo "harita: $PBF ($(du -h "$PBF" | cut -f1))"
 awk '{ if ($1=="primary" && $3=="walking_speed,") { print "        trunk           = walking_speed,"; print "        trunk_link      = walking_speed,"; } print }' profiles/foot.lua > profiles/foot-iz.lua
 grep -q "trunk " profiles/foot-iz.lua || { echo "foot-iz.lua yamasi tutmadi"; exit 1; }
 
+# 2b) Otobüs durakları (telefon otobüs/araba ayrımında kullanır): OSM'den süz, 20 m içindekileri birleştir
+nice osmium tags-filter -O "$PBF" n/highway=bus_stop n/public_transport=platform n/public_transport=stop_position -o /tmp/iz-stops.osm.pbf
+nice osmium export -O /tmp/iz-stops.osm.pbf -f geojsonseq -o /tmp/iz-stops.geojsonseq
+node stops.js /tmp/iz-stops.geojsonseq data/stops.json
+
 # 3) Kurulum: extract -> partition -> customize (MLD). Tek iş parçacığı + düşük öncelik:
 #    aynı sunucudaki CRM vb. servisler yavaşlamasın.
 rm -rf data/new && mkdir -p data/new/foot data/new/car

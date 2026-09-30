@@ -20,7 +20,7 @@ import { insertPoints, insertActivity, getKV, setKV, bumpStat, getStats } from '
 const TASK = 'iz-konum-kaydi';
 const KEEPALIVE_MS = 5 * 60e3; // yerinde dururken de en az bu sıklıkta bir nokta sakla ("kayıt yaşıyor" izi)
 const MOVING_V = 0.8;          // m/s — bunun üstü "hareket halinde": sık nokta
-const SLOW_DIST = 8;           // m — yavaşken / dururken en az bu kadar yer değiştirmeden nokta saklanmaz
+// yavaşken / dururken gereken yer değiştirme profilin 'slow' değeridir (birebir 8 m, maksimum 4 m)
 const toPoint = (l) => ({
   t: Math.round(l.timestamp), lat: l.coords.latitude, lon: l.coords.longitude, acc: l.coords.accuracy,
   spd: l.coords.speed != null && l.coords.speed >= 0 ? l.coords.speed : null,        // m/s (GPS Doppler hızı)
@@ -46,20 +46,23 @@ function flushStats() { try { for (const [k, o] of pend) bumpStat(k, o.n, o.last
 //   'tasknoind' mavi gösterge kapalı (yalnız "süzgeçsiz" kuralı yetiyor mu?)
 export const testMode = () => { try { return getKV('test_mode', null); } catch (e) { return null; } };
 
-// Hassasiyet profilleri. minDist: bir önceki saklanan noktadan en az bu kadar uzaklaşınca yeni nokta saklanır.
+// Hassasiyet profilleri. minDist: hareket halinde bir önceki saklanan noktadan en az bu kadar uzaklaşınca yeni
+// nokta saklanır; slow: yavaşken / dururken gereken yer değiştirme.
+//  'maks'    navigasyon doğruluğu (GPS + hareket algılayıcısı birlikte), ~1 m'de bir nokta — en çok pil
 //  'birebir' GPS'in en iyi doğruluğu; hareket halinde ~2 m'de bir nokta ("metre metre") — yol aynen çizilir
 //  'hassas'  ~12 m'de bir nokta — tür ayrımı için yeterli, daha az veri
 //  'pil'     kaba konum (GPS yerine çoğunlukla Wi-Fi/baz), ~30 m'de bir nokta
 const PROFILES = {
-  birebir: { accuracy: Location.Accuracy.Highest, minDist: 2 },
-  hassas: { accuracy: Location.Accuracy.High, minDist: 12 },
-  pil: { accuracy: Location.Accuracy.Balanced, minDist: 30 },
+  maks: { accuracy: Location.Accuracy.BestForNavigation, minDist: 1, slow: 4 },
+  birebir: { accuracy: Location.Accuracy.Highest, minDist: 2, slow: 8 },
+  hassas: { accuracy: Location.Accuracy.High, minDist: 12, slow: 12 },
+  pil: { accuracy: Location.Accuracy.Balanced, minDist: 30, slow: 30 },
 };
 const prof = (name) => PROFILES[name] || PROFILES.birebir;
 
 // ---- Saklama eleği (görev ve izleyici ortak kullanır) ----
 let lastKept = null;      // en son saklanan nokta
-let minDist = prof(getKV('profile', 'birebir')).minDist;
+let minDist = prof(getKV('profile', 'birebir')).minDist, slowDist = prof(getKV('profile', 'birebir')).slow;
 const dist = (a, b) => Math.hypot((b.lat - a.lat) * 111195, (b.lon - a.lon) * 111195 * Math.cos(a.lat * Math.PI / 180));
 // Gelen konumlardan saklanacakları seçip veritabanına yazar. Dönüş: saklanan nokta sayısı.
 function keep(locations) {
@@ -71,7 +74,7 @@ function keep(locations) {
     // yavaşlayınca / dururken seyrek — en az SLOW_DIST ya da doğruluğun %60'ı. Yoksa yerinde dururken GPS'in
     // sağa sola oynaması binlerce gereksiz nokta (ve pil) harcar. Hız bilinmiyorsa (kaba konum) yavaş sayılır.
     const moving = p.spd != null && p.spd >= MOVING_V;
-    const need = moving ? Math.max(minDist, (p.acc || 0) * 0.3) : Math.max(SLOW_DIST, minDist, (p.acc || 0) * 0.6);
+    const need = moving ? Math.max(minDist, (p.acc || 0) * 0.3) : Math.max(slowDist, minDist, (p.acc || 0) * 0.6);
     if (!lastKept || dist(lastKept, p) >= need || p.t - lastKept.t >= KEEPALIVE_MS) { out.push(p); lastKept = p; }
   }
   if (out.length) insertPoints(out);
@@ -85,10 +88,13 @@ function keep(locations) {
 // "yürüyor/araçta" derse) yeniden en yüksek doğruluğa çıkılır. Kayıt hiç durmaz; yalnız doğruluk değişir.
 // Işıkta / durakta 30-90 sn beklemek GPS'i kısmaz (2 dk'dan kısa).
 const STILL_R = 25, WAKE_R = 60, WAKE_V = 1.5;
-const stillMs = () => (getKV('test_still', 0) || 120) * 1000; // 2 dk (sınamada kısaltılabilir)
+// "Durunca GPS'i kıs" süresi (sn): Ayarlar'dan 0 (hiç) / 60 / 120 / 300. Eski sürümün açık/kapalı ayarı
+// ('smart') seçim yapılmamışsa geçerli: kapalıysa 0, açıksa 120.
+export const stillSec = () => { const v = getKV('still_s', null); return v != null ? v : getKV('smart', true) ? 120 : 0; };
+const stillMs = () => (getKV('test_still', 0) || stillSec()) * 1000; // sınamada kısaltılabilir
 let power = 'high', anchor = null, stillSince = 0, curProfile = getKV('profile', 'birebir');
 // Varsayılan AÇIK (kullanıcı en az pil istedi, 1 Eki 2026). Ayarlar'dan kapatılabilir.
-const smartOn = () => getKV('smart', true) && curProfile !== 'pil';
+const smartOn = () => stillSec() > 0 && curProfile !== 'pil';
 
 // Görev seçenekleri. lowPower: kaba doğruluk (durağan mod).
 function taskOptions(lowPower) {
@@ -166,7 +172,7 @@ export async function status() {
 // Hata olursa fırlatmaz: tanı kaydına yazar ve gerçek durumu döner.
 export async function start(profile = 'birebir') {
   const mode = testMode(), P = prof(profile);
-  minDist = P.minDist; curProfile = profile; power = 'high'; anchor = null;
+  minDist = P.minDist; slowDist = P.slow; curProfile = profile; power = 'high'; anchor = null;
   try {
     const fg = await Location.requestForegroundPermissionsAsync();
     if (!fg.granted) { note('d_startErr', 'konum izni verilmedi'); return status(); }
@@ -285,3 +291,5 @@ export async function geocode(lat, lon) {
 
 // Akıllı pil tasarrufunu aç/kapat (Ayarlar).
 export function setSmart(on) { setKV('smart', !!on); if (!on) setPower('high'); }
+// "Durunca GPS'i kıs" süresi (sn; 0 = hiç kısma). Kapatınca GPS hemen tam doğruluğa döner.
+export function setStill(sec) { setKV('still_s', sec); if (!sec) setPower('high'); }
