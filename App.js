@@ -26,7 +26,9 @@ function tripLegs(trip) {
 // [from,to) aralığını depodan okuyup analiz eder. Gece yarısını aşan duraklar için ±1 gün pay okunur.
 function loadRange(from, to, running, hints, detect) {
   const now = Date.now();
-  return analyze(store.getPoints(addDays(from, -1), addDays(to, 1)), {
+  // Tek gün: tüm noktalar (harita birebir çizilsin). Uzun dönem: 10 sn'de bir nokta analiz için yeter.
+  const step = to - from > 36 * 3600e3 ? 10e3 : 0;
+  return analyze(store.getPoints(addDays(from, -1), addDays(to, 1), step), {
     from, to, saved: store.getPlaces(), overrides: store.getOverrides(), hints, detect,
     now: running && addDays(to, 1) > now ? now : undefined, // "hâlâ orada" yalnız güncel aralıkta
   });
@@ -325,10 +327,11 @@ function AyarlarTab({ trk, onToggle, profile, setProfile, onWipe, rev }) {
       </Card>
       <Card title="HASSASİYET">
         <View style={{ flexDirection: 'row', gap: 8 }}>
-          <Chip label="Hassas" active={profile === 'hassas'} onPress={() => setProfile('hassas')} />
+          <Chip label="Birebir" active={profile === 'birebir'} onPress={() => setProfile('birebir')} />
+          <Chip label="Dengeli" active={profile === 'hassas'} onPress={() => setProfile('hassas')} />
           <Chip label="Pil dostu" active={profile === 'pil'} onPress={() => setProfile('pil')} />
         </View>
-        <Text style={[s.dim, { marginTop: 8 }]}>{profile === 'hassas' ? 'Her ~15 m’de bir nokta. Yaya / araba / metro ayrımı en doğru bu modda çalışır.' : 'Her ~40 m’de bir nokta, daha kaba konum. Pil az gider; kısa yürüyüşler kaçabilir.'}</Text>
+        <Text style={[s.dim, { marginTop: 8 }]}>{profile === 'birebir' ? 'Her ~3 m’de bir nokta, GPS’in en yüksek doğruluğu. Gittiğin yol haritaya aynen çizilir. Pil en çok bu modda gider.' : profile === 'hassas' ? 'Her ~15 m’de bir nokta. Tür ayrımı için yeterli; virajlar hafif köşeli çizilir.' : 'Her ~40 m’de bir nokta, daha kaba konum. Pil az gider; kısa yürüyüşler kaçabilir.'}</Text>
       </Card>
       <Card title="VERİ">
         <View style={s.row}><Text style={[s.tx, { flex: 1 }]}>Kayıtlı nokta</Text><Text style={s.num}>{st.n}</Text></View>
@@ -429,7 +432,7 @@ export default function App() {
   const [day, setDay] = useState(dayStart(Date.now()));
   const [rev, setRev] = useState(0); // veri değişti sayacı (yeni nokta, ad/tür düzeltmesi)
   const [trk, setTrk] = useState({ fg: false, bg: false, running: false });
-  const [profile, setProfileS] = useState(() => store.getKV('profile', 'hassas'));
+  const [profile, setProfileS] = useState(() => store.getKV('profile', 'birebir'));
   const [hints, setHints] = useState(() => store.getKV('hints', null));
   const [trip, setTrip] = useState(null);
   const [place, setPlace] = useState(null);
@@ -441,7 +444,10 @@ export default function App() {
   useEffect(() => {
     (async () => {
       let st = await tracker.status();
-      if (!st.running && st.fg && store.getKV('rec', false)) st = await tracker.start(profile);
+      // Kayıt eski hassasiyet ayarıyla çalışıyorsa (uygulama güncellendi) yeni ayarla yeniden başlat.
+      if (st.fg && store.getKV('rec', false) && (!st.running || store.getKV('applied', null) !== profile)) {
+        st = await tracker.start(profile); store.setKV('applied', profile);
+      }
       setTrk(st);
     })();
     const to = addDays(dayStart(Date.now()), 1);
@@ -479,12 +485,12 @@ export default function App() {
     if (trk.running) { store.setKV('rec', false); setTrk(await tracker.stop()); return; }
     const st = await tracker.start(profile);
     setTrk(st);
-    if (st.running) store.setKV('rec', true);
+    if (st.running) { store.setKV('rec', true); store.setKV('applied', profile); }
     else Alert.alert('Konum izni gerekli', 'Kayıt için iOS Ayarları → Konum bölümünden izin ver.', [{ text: 'Vazgeç' }, { text: 'Ayarları aç', onPress: () => Linking.openSettings() }]);
   };
   const setProfile = async (p) => {
     setProfileS(p); store.setKV('profile', p);
-    if (trk.running) setTrk(await tracker.start(p)); // yeni hassasiyetle yeniden başlat
+    if (trk.running) { setTrk(await tracker.start(p)); store.setKV('applied', p); } // yeni hassasiyetle yeniden başlat
   };
   const onMode = (t, mode) => { store.setOverride(t.t0, mode); setTrip(null); bump(); };
   const onSavePlace = (p, name, kind) => {

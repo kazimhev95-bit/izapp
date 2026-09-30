@@ -25,7 +25,12 @@ export function insertPoints(arr) {
     for (const p of arr) d.runSync('INSERT OR IGNORE INTO points (t, lat, lon, acc, spd) VALUES (?, ?, ?, ?, ?)', p.t, p.lat, p.lon, p.acc ?? null, p.spd ?? null);
   });
 }
-export function getPoints(a, b) { return db().getAllSync('SELECT t, lat, lon, acc, spd FROM points WHERE t >= ? AND t < ? ORDER BY t', a, b); }
+// step (ms) verilirse her step'lik dilimden yalnız ilk nokta okunur — uzun dönem analizinde
+// (hafta/ay) yüz binlerce noktayı belleğe almamak için. Harita (tek gün) step'siz, tam okur.
+export function getPoints(a, b, step = 0) {
+  if (!step) return db().getAllSync('SELECT t, lat, lon, acc, spd FROM points WHERE t >= ? AND t < ? ORDER BY t', a, b);
+  return db().getAllSync('SELECT MIN(t) AS t, lat, lon, acc, spd FROM points WHERE t >= ? AND t < ? GROUP BY t / ? ORDER BY t', a, b, step);
+}
 export function pointStats() { return db().getFirstSync('SELECT COUNT(*) AS n, MIN(t) AS first, MAX(t) AS last FROM points'); }
 
 export function getPlaces() { return db().getAllSync('SELECT id, lat, lon, name, kind, addr FROM places'); }

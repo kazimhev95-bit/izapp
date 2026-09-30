@@ -16,8 +16,12 @@ TaskManager.defineTask(TASK, async ({ data, error }) => {
   } catch (e) { /* tek bir yazma hatası kaydı durdurmasın */ }
 });
 
-// Hassasiyet profilleri: 'hassas' hız/tür ayrımı için en iyisi; 'pil' daha seyrek ve kaba.
+// Hassasiyet profilleri:
+//  'birebir' GPS'in verebildiği en iyi doğruluk, her ~3 m'de nokta — yol haritaya aynen çizilir
+//  'hassas'  her ~15 m — tür ayrımı için yeterli, pil daha az gider
+//  'pil'     seyrek ve kaba
 const PROFILES = {
+  birebir: { accuracy: Location.Accuracy.BestForNavigation, distanceInterval: 3 },
   hassas: { accuracy: Location.Accuracy.High, distanceInterval: 15 },
   pil: { accuracy: Location.Accuracy.Balanced, distanceInterval: 40 },
 };
@@ -31,13 +35,13 @@ export async function status() {
 }
 
 // Kaydı başlatır. Önce "kullanırken", sonra "her zaman" izni istenir (iOS bu sırayı şart koşar).
-export async function start(profile = 'hassas') {
+export async function start(profile = 'birebir') {
   const fg = await Location.requestForegroundPermissionsAsync();
   if (!fg.granted) return status();
   const bg = await Location.requestBackgroundPermissionsAsync().catch(() => ({ granted: false }));
   if (await Location.hasStartedLocationUpdatesAsync(TASK).catch(() => false)) await Location.stopLocationUpdatesAsync(TASK);
   await Location.startLocationUpdatesAsync(TASK, {
-    ...(PROFILES[profile] || PROFILES.hassas),
+    ...(PROFILES[profile] || PROFILES.birebir),
     activityType: Location.ActivityType.Other,
     pausesUpdatesAutomatically: false, // iOS durunca kaydı kendi kesmesin; tekrar başlatmayabiliyor
     // "Her Zaman" izni yoksa arka planda çalışmanın tek yolu mavi gösterge çubuğudur.

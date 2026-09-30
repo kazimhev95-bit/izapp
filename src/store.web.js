@@ -6,7 +6,12 @@ let points = demoPoints(Date.now(), 21);
 let places = [], nextId = 1, overrides = {}, kv = {};
 
 export function insertPoints(arr) { points = points.concat(arr).sort((a, b) => a.t - b.t); }
-export function getPoints(a, b) { return points.filter((p) => p.t >= a && p.t < b); }
+export function getPoints(a, b, step = 0) {
+  const r = points.filter((p) => p.t >= a && p.t < b);
+  if (!step) return r;
+  let last = -1; // her step'lik dilimden ilk nokta (store.js ile aynı davranış)
+  return r.filter((p) => { const k = Math.floor(p.t / step); if (k === last) return false; last = k; return true; });
+}
 export function pointStats() { return { n: points.length, first: points[0]?.t ?? null, last: points[points.length - 1]?.t ?? null }; }
 
 export function getPlaces() { return places.map((p) => ({ ...p })); }
