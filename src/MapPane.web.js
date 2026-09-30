@@ -30,7 +30,7 @@ export default function MapPane(props) {
   }, [ready, legs, stays, fitKey]);
 
   return (
-    <View style={[StyleSheet.absoluteFill, { backgroundColor: '#0B0F13' }]}>
+    <View style={[StyleSheet.absoluteFill, { backgroundColor: '#F4F5F7' }]}>
       <iframe ref={ref} srcDoc={MAP_HTML} title="harita" style={{ border: 0, width: '100%', height: '100%' }} />
     </View>
   );

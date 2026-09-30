@@ -28,7 +28,7 @@ export default function MapPane(props) {
 
   return (
     <WebView
-      ref={ref} style={[StyleSheet.absoluteFill, { backgroundColor: '#0B0F13' }]}
+      ref={ref} style={[StyleSheet.absoluteFill, { backgroundColor: '#F4F5F7' }]}
       originWhitelist={['*']} source={{ html: MAP_HTML, baseUrl: 'https://izapp.local/' }} // baseUrl: karo sunucusu Referer ister
       onMessage={onMessage} javaScriptEnabled domStorageEnabled scrollEnabled={false} bounces={false}
       onContentProcessDidTerminate={() => { setReady(false); lastFit.current = null; ref.current && ref.current.reload(); }}

@@ -1,16 +1,17 @@
-// Görsel dil: koyu grafit zemin, düz paneller, TEK vurgu rengi; ulaşım türleri kendi anlam renginde.
+// Görsel dil: AÇIK tema — beyaz paneller, açık gri zemin, TEK vurgu rengi; ulaşım türleri kendi anlam renginde.
 export const C = {
-  bg: '#0F1419', panel: '#161D24', panel2: '#1C252E', line: '#26313B',
-  text: '#E6EDF3', dim: '#8B98A5', faint: '#5B6873',
-  accent: '#2EC4DB', ok: '#3FB950', warn: '#D29922', bad: '#F85149',
+  bg: '#F4F5F7', panel: '#FFFFFF', panel2: '#EEF1F4', line: '#DCE1E7',
+  text: '#111820', dim: '#5B6873', faint: '#A7B0BA',
+  accent: '#0A84A8', ok: '#2DA44E', warn: '#BF8700', bad: '#D1242F',
+  onAccent: '#FFFFFF', // vurgu rengi üstündeki yazı
 };
 
 // Tür -> etiket, renk, ikon (MaterialCommunityIcons)
 export const MODE = {
-  walk: { label: 'Yaya', color: '#3FB950', icon: 'walk' },
-  bike: { label: 'Bisiklet', color: '#D29922', icon: 'bike' },
-  car: { label: 'Araba', color: '#2EC4DB', icon: 'car' },
-  metro: { label: 'Metro', color: '#A371F7', icon: 'subway-variant' },
+  walk: { label: 'Yaya', color: '#2DA44E', icon: 'walk' },
+  bike: { label: 'Bisiklet', color: '#BF8700', icon: 'bike' },
+  car: { label: 'Araba', color: '#1F6FEB', icon: 'car' },
+  metro: { label: 'Metro', color: '#8250DF', icon: 'subway-variant' },
 };
 
 const AY = ['Oca', 'Şub', 'Mar', 'Nis', 'May', 'Haz', 'Tem', 'Ağu', 'Eyl', 'Eki', 'Kas', 'Ara'];

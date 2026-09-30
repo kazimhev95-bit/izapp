@@ -4,8 +4,8 @@
     "slug": "izapp",
     "version": "1.0.0",
     "orientation": "portrait",
-    "userInterfaceStyle": "dark",
-    "backgroundColor": "#0F1419",
+    "userInterfaceStyle": "light",
+    "backgroundColor": "#F4F5F7",
     "ios": {
       "supportsTablet": false,
       "bundleIdentifier": "com.kazim.izapp",

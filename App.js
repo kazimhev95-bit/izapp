@@ -314,7 +314,7 @@ function AyarlarTab({ trk, onToggle, profile, setProfile, onWipe, rev }) {
           <View style={[s.dot, { backgroundColor: trk.running ? C.ok : C.bad }]} />
           <Text style={[s.tx, { flex: 1 }]}>{trk.running ? 'Konum kaydediliyor' : 'Kayıt durduruldu'}</Text>
           <TouchableOpacity style={[s.btn, !trk.running && { backgroundColor: C.accent, borderColor: C.accent }]} onPress={onToggle}>
-            <Text style={[s.btnTx, !trk.running && { color: C.bg }]}>{trk.running ? 'Durdur' : 'Başlat'}</Text>
+            <Text style={[s.btnTx, !trk.running && { color: C.onAccent }]}>{trk.running ? 'Durdur' : 'Başlat'}</Text>
           </TouchableOpacity>
         </View>
         <View style={s.row}>
@@ -415,7 +415,7 @@ function PlaceModal({ place, onClose, onSave }) {
           <View style={{ flexDirection: 'row', gap: 8, marginTop: 18, justifyContent: 'flex-end' }}>
             <TouchableOpacity style={s.btn} onPress={onClose}><Text style={s.btnTx}>Vazgeç</Text></TouchableOpacity>
             <TouchableOpacity style={[s.btn, { backgroundColor: C.accent, borderColor: C.accent }]} onPress={() => onSave(place, name.trim(), kind || 'other')}>
-              <Text style={[s.btnTx, { color: C.bg }]}>Kaydet</Text>
+              <Text style={[s.btnTx, { color: C.onAccent }]}>Kaydet</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -505,7 +505,7 @@ export default function App() {
 
   return (
     <View style={{ flex: 1, backgroundColor: C.bg }}>
-      <StatusBar style="light" />
+      <StatusBar style="dark" />
       <View style={{ flex: 1 }}>
         {tab === 'harita' ? <HaritaTab data={data} day={day} setDay={setDay} trk={trk} onToggle={onToggle} onPlace={setPlace} /> : null}
         {tab === 'gunluk' ? <GunlukTab data={data} day={day} setDay={setDay} onTrip={setTrip} onPlace={setPlace} /> : null}
@@ -565,7 +565,7 @@ const s = StyleSheet.create({
   navBtn: { flex: 1, alignItems: 'center', gap: 3 },
   navTx: { color: C.dim, fontSize: 10, fontWeight: '600' },
   modalHead: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 8, paddingBottom: 8 },
-  sheetBg: { flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'center', padding: 20 },
+  sheetBg: { flex: 1, backgroundColor: 'rgba(0,0,0,0.35)', justifyContent: 'center', padding: 20 },
   sheet: { backgroundColor: C.panel, borderWidth: 1, borderColor: C.line, borderRadius: 12, padding: 16 },
   input: { marginTop: 6, borderWidth: 1, borderColor: C.line, borderRadius: 8, paddingHorizontal: 10, paddingVertical: 9, color: C.text, fontSize: 14, backgroundColor: C.bg },
 });
