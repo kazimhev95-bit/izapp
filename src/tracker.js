@@ -38,7 +38,9 @@ const PROFILES = {
 export async function status() {
   const fg = await Location.getForegroundPermissionsAsync();
   const bg = await Location.getBackgroundPermissionsAsync();
-  const running = await Location.hasStartedLocationUpdatesAsync(TASK).catch(() => false);
+  // İzin yoksa (ör. «Bir Kez İzin Ver» seçilmiş ve süresi dolmuş) görev kayıtlı görünse bile iOS konum
+  // vermez — bu durumda "çalışıyor" DEME.
+  const running = fg.granted && (await Location.hasStartedLocationUpdatesAsync(TASK).catch(() => false));
   return { fg: fg.granted, bg: bg.granted, canAskBg: bg.canAskAgain, running };
 }
 

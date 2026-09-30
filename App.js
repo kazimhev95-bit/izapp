@@ -114,7 +114,7 @@ function HaritaTab({ data, day, setDay, trk, onToggle, onPlace, me }) {
           {/* Anlık hız (GPS'ten). Konum gelmiyorsa nedenini Ayarlar → Tanı gösterir. */}
           <View style={[s.recPill, { marginRight: 8 }]}>
             <Feather name="activity" size={13} color={me ? C.accent : C.faint} />
-            <Text style={s.recTx}>{me ? (me.spd != null ? Math.round(me.spd * 3.6) + ' km/s' : '— km/s') + ' · ±' + Math.round(me.acc) + ' m' : 'konum bekleniyor'}</Text>
+            <Text style={s.recTx}>{me ? (me.spd != null ? Math.round(me.spd * 3.6) + ' km/s' : '— km/s') + ' · ±' + Math.round(me.acc) + ' m' : trk.fg ? 'konum bekleniyor' : 'izin yok'}</Text>
           </View>
           {/* Konumuma git: haritayı şu an bulunduğum noktaya ortalar */}
           <TouchableOpacity style={[s.locBtn, !me && { opacity: 0.5 }]} disabled={!me} onPress={() => setCenterTick(centerTick + 1)}>
@@ -122,6 +122,13 @@ function HaritaTab({ data, day, setDay, trk, onToggle, onPlace, me }) {
           </TouchableOpacity>
         </View>
       </View>
+      {/* İzin yoksa hiçbir şey kaydedilmez — bunu gizleme, büyük ve net göster. */}
+      {!trk.fg ? (
+        <TouchableOpacity style={s.permBanner} onPress={onToggle}>
+          <Feather name="alert-triangle" size={18} color="#fff" />
+          <Text style={s.permTx}>Konum izni yok — kayıt yapılmıyor. İzin vermek için dokun. («Bir Kez» değil, «Uygulamayı Kullanırken» seç; sonra «Her Zaman»a çevir.)</Text>
+        </TouchableOpacity>
+      ) : null}
       <View style={s.overlayBottom}>
         <View style={s.statRow}>
           <Stat label="Mesafe" value={fmtKm(t.dist)} />
@@ -131,7 +138,7 @@ function HaritaTab({ data, day, setDay, trk, onToggle, onPlace, me }) {
         </View>
         <ModeRow modes={t.modes} />
         {/* Kayıt gerçekten işliyor mu? Nokta sayısı hareket ettikçe artmalı. */}
-        <Text style={s.dim}>{data.nPoints} nokta kaydedildi{data.lastT ? ' · son ' + fmtClockS(data.lastT) : ''}</Text>
+        <Text style={s.dim}>{data.nPoints} nokta kaydedildi{data.lastT ? ' · son ' + fmtClockS(data.lastT) : ''} · v{VERSION}</Text>
       </View>
     </View>
   );
@@ -393,7 +400,7 @@ function AyarlarTab({ trk, onToggle, profile, setProfile, onWipe, rev }) {
           <Text style={[s.btnTx, { color: C.bad }]}>Tüm veriyi sil</Text>
         </TouchableOpacity>
       </Card>
-      <Text style={[s.dim, { textAlign: 'center' }]}>İZ · sürüm {VERSION}</Text>
+      <Text style={[s.tx, { textAlign: 'center', fontWeight: '700' }]}>İZ · sürüm {VERSION}</Text>
     </ScrollView>
   );
 }
@@ -498,7 +505,8 @@ export default function App() {
       let st = await tracker.status();
       // Kayıt açık bırakılmışsa HER açılışta durdurup yeniden başlat: güncelleme/yeniden kurulumdan
       // sonra iOS görevi "kayıtlı" gösterip gerçekte konum vermeyebiliyor (kayıt sessizce ölüyor).
-      if (st.fg && store.getKV('rec', false)) { st = await tracker.start(profile); store.setKV('applied', profile); }
+      // İzin düşmüşse start() iOS izin penceresini yeniden açar.
+      if (store.getKV('rec', false)) { st = await tracker.start(profile); store.setKV('applied', profile); }
       setTrk(st);
     })();
     const to = addDays(dayStart(Date.now()), 1);
@@ -606,6 +614,8 @@ const s = StyleSheet.create({
   overlayTop: { position: 'absolute', left: 14, right: 14 },
   recPill: { flexDirection: 'row', alignItems: 'center', gap: 6, alignSelf: 'flex-start', marginTop: 8, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8, backgroundColor: C.panel, borderWidth: 1, borderColor: C.line },
   locBtn: { width: 40, height: 40, borderRadius: 10, marginTop: 8, backgroundColor: C.panel, borderWidth: 1, borderColor: C.line, alignItems: 'center', justifyContent: 'center' },
+  permBanner: { position: 'absolute', left: 14, right: 14, top: TOP + 110, flexDirection: 'row', gap: 10, alignItems: 'center', backgroundColor: C.bad, borderRadius: 10, padding: 12 },
+  permTx: { color: '#fff', fontSize: 13, fontWeight: '600', flex: 1 },
   recTx: { color: C.text, fontSize: 12, fontWeight: '600' },
   overlayBottom: { position: 'absolute', left: 14, right: 14, bottom: 12, backgroundColor: C.panel, borderWidth: 1, borderColor: C.line, borderRadius: 10, padding: 12, gap: 10 },
   statRow: { flexDirection: 'row', gap: 10 },
