@@ -110,6 +110,12 @@ function HaritaTab({ data, day, setDay, trk, onToggle, onPlace, me }) {
             <View style={[s.dot, { backgroundColor: trk.running ? C.ok : C.bad }]} />
             <Text style={s.recTx}>{trk.running ? 'Kayıt açık' : 'Kayıt kapalı — başlat'}</Text>
           </TouchableOpacity>
+          <View style={{ flex: 1 }} />
+          {/* Anlık hız (GPS'ten). Konum gelmiyorsa nedenini Ayarlar → Tanı gösterir. */}
+          <View style={[s.recPill, { marginRight: 8 }]}>
+            <Feather name="activity" size={13} color={me ? C.accent : C.faint} />
+            <Text style={s.recTx}>{me ? (me.spd != null ? Math.round(me.spd * 3.6) + ' km/s' : '— km/s') + ' · ±' + Math.round(me.acc) + ' m' : 'konum bekleniyor'}</Text>
+          </View>
           {/* Konumuma git: haritayı şu an bulunduğum noktaya ortalar */}
           <TouchableOpacity style={[s.locBtn, !me && { opacity: 0.5 }]} disabled={!me} onPress={() => setCenterTick(centerTick + 1)}>
             <Feather name="navigation" size={18} color={C.accent} />
@@ -318,6 +324,13 @@ function Rt({ label, range, avg }) {
 // ===================== AYARLAR =====================
 function AyarlarTab({ trk, onToggle, profile, setProfile, onWipe, rev }) {
   const st = useMemo(() => store.pointStats(), [rev, trk]);
+  // Tanı: ham durum (izin, görev, son çağrı, hata). Sekme açılınca ve 10 sn'de bir yenilenir.
+  const [dg, setDg] = useState({});
+  const [testing, setTesting] = useState(false);
+  useEffect(() => { let on = true; tracker.diag(false).then((d) => on && setDg((o) => ({ ...d, test: o.test }))); return () => { on = false; }; }, [rev, trk]);
+  const runTest = async () => { setTesting(true); const d = await tracker.diag(true); setDg(d); setTesting(false); };
+  const ago = (t) => (t ? fmtClockS(t) + ' (' + fmtDur(Date.now() - t) + ' önce)' : 'hiç');
+  const yn = (v) => (v === true ? 'evet' : v === false ? 'HAYIR' : String(v));
   const perm = trk.bg ? ['Her zaman', C.ok] : trk.fg ? ['Yalnız kullanırken', C.warn] : ['İzin yok', C.bad];
   return (
     <ScrollView style={{ flex: 1, paddingTop: TOP }} contentContainerStyle={{ padding: 14, paddingBottom: 60 }}>
@@ -345,6 +358,31 @@ function AyarlarTab({ trk, onToggle, profile, setProfile, onWipe, rev }) {
           <Chip label="Pil dostu" active={profile === 'pil'} onPress={() => setProfile('pil')} />
         </View>
         <Text style={[s.dim, { marginTop: 8 }]}>{profile === 'birebir' ? 'Her ~3 m’de bir nokta, GPS’in en yüksek doğruluğu. Gittiğin yol haritaya aynen çizilir. Pil en çok bu modda gider.' : profile === 'hassas' ? 'Her ~15 m’de bir nokta. Tür ayrımı için yeterli; virajlar hafif köşeli çizilir.' : 'Her ~40 m’de bir nokta, daha kaba konum. Pil az gider; kısa yürüyüşler kaçabilir.'}</Text>
+      </Card>
+      <Card title="TANI">
+        {[
+          ['Konum servisleri açık', yn(dg.services)],
+          ['İzin (kullanırken)', String(dg.fg)],
+          ['İzin (her zaman)', String(dg.bg)],
+          ['Arka plan görevi kayıtlı', yn(dg.registered)],
+          ['Arka plan kaydı çalışıyor', yn(dg.started)],
+          ['Son başlatma', ago(dg.d_startAt)],
+          ['Başlatma hatası', dg.d_startErr || 'yok'],
+          ['Arka plan: son nokta', ago(dg.d_taskLast)],
+          ['Arka plan: toplam nokta', String(dg.d_taskN || 0)],
+          ['Arka plan hatası', dg.d_taskErr || 'yok'],
+          ['Canlı konum: son', ago(dg.d_watchLast)],
+          ['Canlı konum hatası', dg.d_watchErr || 'yok'],
+          ['Konum testi', testing ? 'bekleniyor…' : dg.test || 'yapılmadı'],
+        ].map(([k, v]) => (
+          <View key={k} style={{ paddingVertical: 4 }}>
+            <Text style={s.dim}>{k}</Text>
+            <Text style={s.num} selectable>{v}</Text>
+          </View>
+        ))}
+        <TouchableOpacity style={[s.btn, { marginTop: 8, alignSelf: 'flex-start' }]} disabled={testing} onPress={runTest}>
+          <Text style={s.btnTx}>Konum testi yap</Text>
+        </TouchableOpacity>
       </Card>
       <Card title="VERİ">
         <View style={s.row}><Text style={[s.tx, { flex: 1 }]}>Kayıtlı nokta</Text><Text style={s.num}>{st.n}</Text></View>
@@ -458,10 +496,9 @@ export default function App() {
   useEffect(() => {
     (async () => {
       let st = await tracker.status();
-      // Kayıt eski hassasiyet ayarıyla çalışıyorsa (uygulama güncellendi) yeni ayarla yeniden başlat.
-      if (st.fg && store.getKV('rec', false) && (!st.running || store.getKV('applied', null) !== profile)) {
-        st = await tracker.start(profile); store.setKV('applied', profile);
-      }
+      // Kayıt açık bırakılmışsa HER açılışta durdurup yeniden başlat: güncelleme/yeniden kurulumdan
+      // sonra iOS görevi "kayıtlı" gösterip gerçekte konum vermeyebiliyor (kayıt sessizce ölüyor).
+      if (st.fg && store.getKV('rec', false)) { st = await tracker.start(profile); store.setKV('applied', profile); }
       setTrk(st);
     })();
     const to = addDays(dayStart(Date.now()), 1);
