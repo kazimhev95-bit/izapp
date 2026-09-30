@@ -5,8 +5,11 @@ export async function start() { running = true; return status(); }
 export async function stop() { running = false; return status(); }
 export async function geocode() { return null; }
 export const testMode = () => null;
+export async function startActivity() { return true; }
+export function stopActivity() {}
+export function setSmart() {}
 export async function diag(test) {
-  return { services: true, fg: 'granted / always', bg: 'granted', registered: true, started: running, stats: {}, test: test ? 'önizlemede yok' : undefined };
+  return { services: true, fg: 'granted / always', bg: 'granted', registered: true, started: running, motion: 'granted', power: 'high', stats: {}, test: test ? 'önizlemede yok' : undefined };
 }
 // Önizlemede tarayıcının konumu (izin verilirse) canlı nokta olarak gösterilir.
 export function watch(cb) {

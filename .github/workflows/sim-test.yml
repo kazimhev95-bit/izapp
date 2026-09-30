@@ -48,7 +48,7 @@ jobs:
         with:
           node-version: 20
 
-      - name: JS bagimliliklarini yukle (postinstall yerel yamayi uygular)
+      - name: JS bagimliliklarini yukle
         run: npm install
 
       - name: iOS native projesini uret (prebuild)

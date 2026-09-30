@@ -24,8 +24,7 @@
     "start": "expo start",
     "ios": "expo start --ios",
     "web": "expo start --web",
-    "test": "node test/engine.test.mjs",
-    "postinstall": "node scripts/patch-native.js"
+    "test": "node test/engine.test.mjs"
   },
   "private": true
 }
