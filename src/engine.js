@@ -39,8 +39,11 @@ export const CFG = {
   ACT_VALID: 3 * 60e3,    // ms — bir hareket kaydı en çok bu kadar süre geçerli sayılır
   STOP_V: 1.0,            // m/s — araçta bunun altı "duruş"
   STOP_MIN: 8e3,          // ms — en kısa duruş
+  STOP_AVG: 2.5,          // m/s — seyrek noktalarda: uzun parçanın ortalaması bunun altındaysa duruş sayılır
   BUS_MIN_D: 800,         // m — otobüs sayılacak araç parçasının en kısa mesafesi
-  BUS_STOPS_KM: 1.0,      // km başına en az duruş (otobüs durak durak gider)
+  BUS_STOPS_KM: 1.0,      // km başına duruş (otobüs durak durak gider); iki uçta yürüyüş varsa BUS_STOPS_KM2 yeter
+  BUS_STOPS_KM2: 0.6,
+  BUS_TAIL_WAIT: 90e3,    // ms — araçtan hemen önceki yürüyüş en az bu kadar yerinde beklemeyle bitiyorsa: durakta bekleme
   BUS_MAX_V: 20,          // m/s (72 km/s) — şehir içi otobüs bundan hızlı gitmez
   BUS_WALK_D: 100,        // m — araçtan önce/sonra en az bu kadar yürüyüş (durağa yürüme)
   BUS_WAIT_MAX: 20 * 60e3,// ms — araçtan önceki kısa durak "durakta bekleme" sayılır
@@ -299,20 +302,26 @@ function makeTrip(p, a, b, actAt) {
   coalesce('mode');
 
   const legs = runs.map((r) => {
-    // Araç parçasındaki duruşlar (ışık, durak): hızın STOP_V altında en az STOP_MIN sürdüğü aralıklar.
-    let stops = 0, stopMs = 0, run = 0, est = 0; const ws = [];
+    // Araç parçasındaki duruşlar (ışık, durak). İki biçimde görünür:
+    //  (a) sık noktalarda hız STOP_V altına iner ve en az STOP_MIN sürer,
+    //  (b) dururken nokta gelmez (yer değiştirme yok): tek bir uzun parça, ortalaması STOP_AVG altında.
+    // Sondaki yavaşlık (yürüyüşün sonunda durakta bekleme) ayrıca ölçülür: tailWait.
+    let stops = 0, stopMs = 0, run = 0, est = 0, tailWait = 0; const ws = [];
     for (let k = r.a; k <= r.b; k++) {
       const s = segs[k];
       if (s.kind !== 'move') est += s.d; else ws.push(s.ws);
-      if (s.kind === 'move' && s.ws < CFG.STOP_V) run += s.dt;
+      const slow = s.kind === 'move' && (s.ws < CFG.STOP_V || (s.dt >= CFG.STOP_MIN && s.d / (s.dt / 1000) < CFG.STOP_AVG));
+      if (slow) run += s.dt;
       else { if (run >= CFG.STOP_MIN) { stops++; stopMs += run; } run = 0; }
     }
     if (run >= CFG.STOP_MIN) { stops++; stopMs += run; }
+    for (let k = r.b; k >= r.a; k--) { const s = segs[k]; if (s.kind === 'move' && s.d / (s.dt / 1000) < 0.4) tailWait += s.dt; else break; }
     return {
       mode: r.mode, a: r.a, b: r.b + 1, // a..b: yolculuk içi nokta indeksleri (b dahil)
       t0: sp[r.a].t, t1: sp[r.b + 1].t, dist: r.d, dur: r.dt, avg: r.d / (r.dt / 1000),
       max: Math.max(quantile(ws, 0.95), r.d / (r.dt / 1000)), stops, stopMs,
       est: est > r.d * 0.5, // parçanın çoğu kayıt boşluğu/GPS'siz mi (tahmini)
+      tailWait,             // sonunda yerinde bekleme (ms) — yürüyüşün sonunda durakta bekleme ipucu
     };
   });
   const dur = sp[n - 1].t - sp[0].t;
@@ -364,28 +373,34 @@ export function segment(points, acts) {
   return items;
 }
 
-// Araba mı otobüs mü? Yalnız hızla ayrılmaz; iki ipucu birlikte aranır:
-//  (1) durak durak gitme: km başına duruş sayısı yüksek, tepe hız düşük
-//  (2) araçtan önce ya da sonra yürüyüş (durağa gitme / duraktan yürüme) — arabada kapıdan binilir
-// Aradaki kısa durak (durakta bekleme) yolculuğu böldüyse komşu yolculuğun yürüyüşüne de bakılır.
+// Araba mı otobüs mü? Telefonun hareket algılayıcısı ikisine de "araçta" der; hız da benzer. Ayırt eden
+// davranıştır — gerçek kayıtla (30 Eyl, iş → otobüs → yürü → otobüs → ev) ayarlandı:
+//  • durakta bekleme: araçtan hemen önce kısa bir durak (≤ 20 dk) ya da yürüyüşün sonunda ≥ 90 sn bekleme,
+//    öncesinde durağa yürüyüş → en güçlü ipucu (kendi arabana binmeden önce yol kenarında beklemezsin)
+//  • durak durak gitme: km başına duruş
+//  • araçtan önce / sonra yürüyüş (durağa gitme / duraktan yürüme)
 function refineBus(items) {
-  const walkNear = (i, dir) => { // i. öğeden dir yönündeki komşu yolculuğun uç yürüyüş parçası (m)
-    let j = i + dir;
-    if (items[j] && items[j].type === 'stay' && items[j].t1 - items[j].t0 <= CFG.BUS_WAIT_MAX) j += dir;
+  // i. öğeden dir yönündeki komşu yolculuğun uç yürüyüşü (m); arada kısa durak varsa onu da bildir
+  const near = (i, dir) => {
+    let j = i + dir, wait = false;
+    if (items[j] && items[j].type === 'stay' && items[j].t1 - items[j].t0 <= CFG.BUS_WAIT_MAX) { j += dir; wait = true; }
     const t = items[j];
-    if (!t || t.type !== 'trip') return 0;
+    if (!t || t.type !== 'trip') return { walk: 0, wait: false };
     const leg = dir < 0 ? t.legs[t.legs.length - 1] : t.legs[0];
-    return leg.mode === 'walk' ? leg.dist : 0;
+    return { walk: leg.mode === 'walk' ? leg.dist : 0, wait };
   };
   items.forEach((trip, i) => {
     if (trip.type !== 'trip') return;
     trip.legs.forEach((leg, li) => {
       if (leg.mode !== 'car' || leg.est || leg.dist < CFG.BUS_MIN_D || leg.max > CFG.BUS_MAX_V) return;
-      if (leg.stops / (leg.dist / 1000) < CFG.BUS_STOPS_KM) return;
       const prev = trip.legs[li - 1], next = trip.legs[li + 1];
-      const before = prev ? (prev.mode === 'walk' ? prev.dist : 0) : walkNear(i, -1);
-      const after = next ? (next.mode === 'walk' ? next.dist : 0) : walkNear(i, 1);
-      if (before >= CFG.BUS_WALK_D || after >= CFG.BUS_WALK_D) leg.mode = 'bus';
+      const nb = prev ? null : near(i, -1), na = next ? null : near(i, 1);
+      const before = prev ? (prev.mode === 'walk' ? prev.dist : 0) : nb.walk;
+      const after = next ? (next.mode === 'walk' ? next.dist : 0) : na.walk;
+      const waited = prev ? prev.mode === 'walk' && prev.tailWait >= CFG.BUS_TAIL_WAIT : nb.wait;
+      const rate = leg.stops / (leg.dist / 1000);
+      const W = CFG.BUS_WALK_D;
+      if ((waited && before >= W) || (rate >= CFG.BUS_STOPS_KM && (before >= W || after >= W)) || (rate >= CFG.BUS_STOPS_KM2 && before >= W && after >= W)) leg.mode = 'bus';
     });
     setTripMode(trip);
     // Otobüs/metro ile başlayan yolculuğun hemen öncesindeki kısa durak = durakta/istasyonda bekleme.

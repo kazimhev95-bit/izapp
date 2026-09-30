@@ -1,9 +1,19 @@
-// Web önizlemesi için bellek içi depo (SQLite yerine) — sentetik demo veriyle dolu gelir.
-// İmzalar store.js ile birebir aynıdır.
+// Web önizlemesi için bellek içi depo (SQLite yerine). İmzalar store.js ile birebir aynıdır.
+// Önizleme klasöründe veri.json varsa (telefondan dışa aktarılan GERÇEK kayıt) onu yükler; yoksa
+// sentetik demo veriyle dolar. (veri.json: node scripts/csv2json.js veri/iz-veri-*.csv dist/veri.json)
 import { demoData } from './demo';
 
-const D = demoData(Date.now(), 21);
-let points = D.points, acts = D.acts;
+function loadReal() {
+  try {
+    const x = new XMLHttpRequest();
+    x.open('GET', './veri.json', false); // eşzamanlı: depo modül yüklenirken hazır olsun
+    x.send();
+    if (x.status === 200) { const j = JSON.parse(x.responseText); if (j && j.points && j.points.length) return j; }
+  } catch (e) { /* yoksa demo */ }
+  return null;
+}
+const D = loadReal() || demoData(Date.now(), 21);
+let points = D.points, acts = D.acts || [];
 let places = [], nextId = 1, overrides = {}, kv = {};
 
 export function insertPoints(arr) { points = points.concat(arr).sort((a, b) => a.t - b.t); }

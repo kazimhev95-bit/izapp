@@ -129,6 +129,8 @@ function LegStrip({ trip }) {
     </View>
   );
 }
+// Parça sırası: "Yaya → Otobüs → Yaya → Otobüs" (art arda aynı tür tek sayılır)
+const seqLabel = (trip) => trip.legs.map((l) => MODE[l.mode].label).filter((x, i, a) => i === 0 || a[i - 1] !== x).join(' → ');
 // Araç parçalarındaki toplam duruş sayısı (ışık / durak)
 const tripStops = (trip) => trip.legs.reduce((n, l) => n + (l.mode === 'car' || l.mode === 'bus' ? l.stops : 0), 0);
 
@@ -233,6 +235,22 @@ function GunlukTab({ data, day, setDay, onTrip, onPlace, steps }) {
                 <View style={[s.tlIcon, { borderColor: C.line }]}><Feather name="slash" size={13} color={C.faint} /></View>
                 <Text style={[s.dim, { flex: 1 }]}>Veri yok · {fmtClock(it.t0)} – {fmtClock(it.t1)}</Text>
               </View>
+            );
+            // Birden çok parçalı yolculuk (ör. yürü → otobüs → yürü → otobüs): her parça kendi satırında
+            if (!it.overridden && it.legs.length > 1) return (
+              <TouchableOpacity key={i} style={s.group} onPress={() => onTrip(it)}>
+                <Text style={s.groupTx} numberOfLines={1}>{seqLabel(it)} · {fmtKm(it.dist)} · {fmtDur(it.dur)}</Text>
+                {[...it.legs].reverse().map((l, k) => (
+                  <View key={k} style={s.tl}>
+                    <View style={[s.tlIcon, { borderColor: MODE[l.mode].color }]}><ModeIcon mode={l.mode} size={15} /></View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={s.tx}>{MODE[l.mode].label}{l.est ? ' (tahmini)' : ''} · {fmtKm(l.dist)}</Text>
+                      <Text style={s.dim}>{fmtClock(l.t0)} – {fmtClock(l.t1)} · ort {fmtKmh(l.avg)}{(l.mode === 'bus' || l.mode === 'car') && l.stops ? ' · ' + l.stops + ' duruş' : ''}{l.mode === 'walk' && l.tailWait >= 90e3 ? ' · sonunda ' + fmtDur(l.tailWait) + ' bekleme' : ''}</Text>
+                    </View>
+                    <Text style={s.num}>{fmtDur(l.dur)}</Text>
+                  </View>
+                ))}
+              </TouchableOpacity>
             );
             const st = tripStops(it);
             return (
@@ -826,6 +844,8 @@ const s = StyleSheet.create({
   modeChip: { flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 8, paddingVertical: 5, borderRadius: 7, backgroundColor: C.panel2 },
   modeChipTx: { color: C.text, fontSize: 13, fontWeight: '600', ...mono },
   tl: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 8 },
+  group: { borderLeftWidth: 2, borderLeftColor: C.line, paddingLeft: 8, marginVertical: 4 },
+  groupTx: { color: C.dim, fontSize: 11, fontWeight: '700', letterSpacing: 0.3, marginTop: 4 },
   tlIcon: { width: 30, height: 30, borderRadius: 15, borderWidth: 1.5, borderColor: C.accent, alignItems: 'center', justifyContent: 'center', backgroundColor: C.panel2 },
   axis: { color: C.faint, fontSize: 10, textAlign: 'center' },
   barBg: { height: 4, borderRadius: 2, backgroundColor: C.panel2, marginVertical: 5 },

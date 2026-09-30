@@ -197,10 +197,16 @@ export function watch(cb, record, profile = 'birebir') {
 // Tür ayrımında hızdan daha güvenilir: trafikte sürünen araba "yürüyüş" sanılmaz, koşu "araç" sanılmaz.
 const ACT_KEYS = [['automotive', 'A'], ['cycling', 'C'], ['running', 'R'], ['walking', 'W'], ['stationary', 'S']];
 let actSub = null, actTimer = null, lastAct = null, lastActTick = 0;
+let lastSaved = null; // en son veritabanına yazılan hareket durumu
 function onActivity(a) {
   let k = 'U', c = 0;
   for (const [name, code] of ACT_KEYS) { const e = a.activities && a.activities[name]; if (e && e.detected) { k = code; c = e.confidence; break; } }
-  lastAct = { k, c };
+  // Düşük güvenli okumalar (telefon masadayken saniyede birkaç kez "bilinmiyor/duruyor" diye titrer) tür
+  // ayrımında kullanılmaz: yalnız güvenli bir durumun BİTTİĞİNİ işaretlemek için bir kez yazılır.
+  if (c < 1) { k = 'U'; if (!lastSaved || lastSaved.c < 1) { lastAct = null; return; } }
+  if (lastSaved && lastSaved.k === k && lastSaved.c === c) { lastAct = c >= 1 ? { k, c } : null; return; } // değişmedi
+  lastSaved = { k, c };
+  lastAct = c >= 1 ? { k, c } : null;
   if (power === 'low' && c >= 1 && k !== 'S' && k !== 'U') setPower('high'); // kıpırdadı: GPS'i hemen aç
   try { insertActivity(Math.round(a.timestamp || Date.now()), k, c); count('act'); } catch (e) { /* yoksay */ }
 }
