@@ -1,0 +1,28 @@
+{
+  "expo": {
+    "name": "İZ",
+    "slug": "izapp",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "backgroundColor": "#0F1419",
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.kazim.izapp",
+      "buildNumber": "1"
+    },
+    "plugins": [
+      "expo-sqlite",
+      [
+        "expo-location",
+        {
+          "isIosBackgroundLocationEnabled": true,
+          "locationWhenInUsePermission": "İZ gittiğin yolu haritada göstermek için konumunu kullanır.",
+          "locationAlwaysAndWhenInUsePermission": "İZ, uygulama kapalıyken de gittiğin yolu kaydedebilmek için konumuna her zaman erişmek ister. Veriler yalnız bu telefonda saklanır.",
+          "locationAlwaysPermission": "İZ, uygulama kapalıyken de gittiğin yolu kaydedebilmek için konumuna her zaman erişmek ister."
+        }
+      ],
+      "expo-font"
+    ]
+  }
+}

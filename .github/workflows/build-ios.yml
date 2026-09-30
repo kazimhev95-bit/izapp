@@ -1,0 +1,88 @@
+name: Build unsigned iOS IPA
+
+# Sideloadly ile yandan yukleme icin imzasiz bir .ipa uretir.
+# Imzalama Sideloadly tarafinda (ucretsiz Apple ID) yapilir.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, master]
+
+jobs:
+  build-ios:
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - name: Kodu indir
+        uses: actions/checkout@v4
+
+      - name: En yeni Xcode'u sec (Swift 6.2 icin)
+        run: |
+          LATEST=$(ls -d /Applications/Xcode_*.app | sort -V | tail -n1)
+          echo "Secilen Xcode: $LATEST"
+          sudo xcode-select -s "$LATEST"
+          xcodebuild -version
+          swift --version
+
+      - name: Node.js kur
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: JS bagimliliklarini yukle
+        run: npm install
+
+      - name: Surum/build numarasini benzersiz yap (iOS guncellemeyi tanisin)
+        env:
+          RUN: ${{ github.run_number }}
+        run: |
+          node -e "const fs=require('fs');const p='app.json';const j=JSON.parse(fs.readFileSync(p,'utf8'));j.expo.ios=j.expo.ios||{};const rn=Number(process.env.RUN||'1');j.expo.version='1.0.'+rn;j.expo.ios.buildNumber=String(100+rn);fs.writeFileSync(p,JSON.stringify(j,null,2));console.log('VERSION',j.expo.version,'BUILD',j.expo.ios.buildNumber);"
+
+      - name: iOS native projesini uret (prebuild)
+        run: npx expo prebuild --platform ios --no-install
+
+      - name: CocoaPods yukle
+        working-directory: ios
+        run: pod install
+
+      - name: Workspace ve scheme adini bul
+        id: xc
+        working-directory: ios
+        run: |
+          PROJ=$(ls -d *.xcodeproj | head -n1 | sed 's/\.xcodeproj$//')
+          echo "scheme=$PROJ" >> "$GITHUB_OUTPUT"
+          echo "workspace=$PROJ.xcworkspace" >> "$GITHUB_OUTPUT"
+          echo "Bulundu -> scheme: $PROJ , workspace: $PROJ.xcworkspace"
+
+      - name: Imzasiz arsiv olustur
+        working-directory: ios
+        run: |
+          xcodebuild \
+            -workspace "${{ steps.xc.outputs.workspace }}" \
+            -scheme "${{ steps.xc.outputs.scheme }}" \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$PWD/build/app.xcarchive" \
+            archive \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            AD_HOC_CODE_SIGNING_ALLOWED=YES
+
+      - name: .ipa paketle
+        working-directory: ios
+        run: |
+          cd build
+          mkdir -p Payload
+          APP=$(ls -d app.xcarchive/Products/Applications/*.app | head -n1)
+          cp -R "$APP" Payload/
+          zip -r -y izapp.ipa Payload >/dev/null
+          ls -lh izapp.ipa
+
+      - name: .ipa dosyasini yukle (artifact)
+        uses: actions/upload-artifact@v4
+        with:
+          name: izapp-ipa
+          path: ios/build/izapp.ipa
+          if-no-files-found: error
