@@ -1,6 +1,6 @@
 // Harita sayfası (Leaflet + OpenStreetMap, açık yumuşak ton). Telefonda WebView, önizlemede iframe
 // içinde AYNI sayfa çalışır — önizlemede ne görünüyorsa telefonda da o görünür.
-// Veri dışarıdan izSet({legs, stays, marks, fit, pad}) ile, canlı konum izMe({mePos, acc, center, follow}) ile gelir;
+// Veri dışarıdan izSet({legs, stays, marks, dots, fit, pad}) ile, canlı konum izMe({mePos, acc, center, follow}) ile gelir;
 // marks: olay noktaları (araçtan indi/bindi, bekleme) — dokununca saat ve açıklama çıkar;
 // durağa dokunma {stay: key}, haritayı elle kaydırma {drag: 1} olarak döner.
 export const MAP_HTML = `<!doctype html>
@@ -48,6 +48,10 @@ export const MAP_HTML = `<!doctype html>
         L.polyline(l.pts,{color:l.color,weight:l.w,lineCap:'round',lineJoin:'round',smoothFactor:0,dashArray:l.dash?'8 8':null}).addTo(g);
         all=all.concat(l.pts);
       });
+      // Kayıt noktaları ("boncuklar"): GPS'in gerçekten ölçtüğü yerler — beyaz, halkası parçanın renginde
+      (d.dots||[]).forEach(function(p){
+        L.circleMarker([p[0],p[1]],{radius:2.6,color:p[2]||'#5B6873',weight:1.3,fillColor:'#FFFFFF',fillOpacity:1,interactive:false}).addTo(g);
+      });
       // Olay noktaları: bekleme = gri halka; araç değişimi = koyu halka, içi yeni türün renginde
       (d.marks||[]).forEach(function(m){
         var w=m.k==='wait';
@@ -66,11 +70,12 @@ export const MAP_HTML = `<!doctype html>
 </script></body></html>`;
 
 // Uygulama verisini harita sayfasının beklediği yalın biçime çevirir.
-export function mapPayload({ legs, stays, marks, pad }, colors, fit) {
+export function mapPayload({ legs, stays, marks, dots, pad }, colors, fit) {
   const L = legs.map((l) => ({ color: colors[l.mode].color, dash: !!l.dash, w: l.mode === 'raw' ? 2 : 5, pts: l.coords.map((c) => [c.latitude, c.longitude]) }));
   return {
     legs: L, stays: stays.map((s) => ({ key: s.key, lat: s.lat, lon: s.lon })),
     marks: (marks || []).map((m) => ({ k: m.kind, lat: m.lat, lon: m.lon, t: m.label, c: m.mode ? colors[m.mode].color : null })),
+    dots: (dots || []).map((q) => [q.lat, q.lon, q.mode ? colors[q.mode].color : null]),
     fit, pad: pad || { top: 120, right: 50, bottom: 260, left: 50 },
   };
 }

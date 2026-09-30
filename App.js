@@ -19,7 +19,7 @@ const VERSION = require('./app.json').expo.version;
 const TOP = Platform.OS === 'ios' ? 54 : 14;   // çentik payı
 const BOTTOM = Platform.OS === 'ios' ? 26 : 8; // ana ekran çizgisi payı
 const KIND_ICON = { home: 'home', work: 'briefcase' };
-const DP_EPS = 4; // m — çizimde bu kadar sapan ara noktalar atılır (düz yol düz çizilsin)
+const DP_EPS = 2; // m — çizimde bu kadar sapan ara noktalar atılır (ayrıntı kalsın; zikzağı düzeltme halleder)
 const toCoords = (pts) => pts.map((p) => ({ latitude: p.lat, longitude: p.lon }));
 
 // Bir yolculuğun haritada çizilecek çizgileri: parça parça (türe göre renkli), kayıt boşluğu / GPS'siz
@@ -75,6 +75,15 @@ function tripMarks(trip) {
       out.push({ kind: 'switch', lat: q.lat, lon: q.lon, mode: l.mode, label: fmtClock(l.t0) + ' · ' + switchLabel(trip.legs[i - 1].mode, l.mode) });
     }
     for (const w of l.waits || []) out.push({ kind: 'wait', lat: w.lat, lon: w.lon, label: fmtClock(w.t0) + ' · ' + fmtDurS(w.t1 - w.t0) + ' ' + waitWhat(trip.overridden ? trip.mode : l.mode) });
+  });
+  return out;
+}
+// Yolculuğun kayıt noktaları (ham GPS) — bulunduğu parçanın renginde: "nerede gerçekten ölçülmüş"
+function tripDots(trip) {
+  const out = [];
+  trip.legs.forEach((l, li) => {
+    const mode = trip.overridden ? trip.mode : l.mode;
+    for (let k = l.a + (li ? 1 : 0); k <= l.b; k++) { const q = trip.raw ? trip.raw[k] : trip.pts[k]; if (q && !q.syn) out.push({ lat: q.lat, lon: q.lon, mode }); }
   });
   return out;
 }
@@ -200,6 +209,8 @@ function HaritaTab({ data, day, setDay, trk, onToggle, onPlace, me, steps, lastA
   // Yolculuklar: düzeltilmiş + türe göre renkli. İstenirse altına ham iz (ince gri) eklenir.
   const lines = useMemo(() => data.items.filter((i) => i.type === 'trip').flatMap(tripLines), [data]);
   const legs = useMemo(() => (showRaw ? [...data.track.map((l) => ({ mode: 'raw', coords: toCoords(l) })), ...lines] : lines), [lines, showRaw, data]);
+  // Ham iz katmanı açıkken kayıt noktaları da tek tek (gri boncuk) görünür
+  const dots = useMemo(() => (showRaw ? data.track.flat().map((q) => ({ lat: q.lat, lon: q.lon })) : null), [showRaw, data]);
   const stays = useMemo(() => data.places.map((p) => ({ key: p.id, lat: p.lat, lon: p.lon, kind: p.kind, place: p })), [data]);
   // Olay noktaları: araçtan indi / bindi, yolda beklemeler (dokununca saat + açıklama)
   const marks = useMemo(() => data.items.filter((i) => i.type === 'trip').flatMap(tripMarks), [data]);
@@ -224,7 +235,7 @@ function HaritaTab({ data, day, setDay, trk, onToggle, onPlace, me, steps, lastA
   }
   return (
     <View style={{ flex: 1 }}>
-      <MapPane legs={legs} stays={stays} marks={marks} fitKey={String(day)} me={pos} centerTick={centerTick} follow={follow && isToday}
+      <MapPane legs={legs} stays={stays} marks={marks} dots={dots} fitKey={String(day)} me={pos} centerTick={centerTick} follow={follow && isToday}
         onUserDrag={() => setFollow(false)} onStayPress={(m) => onPlace(m.place)} />
       <View style={[s.overlayTop, { top: TOP }]}>
         <DateBar day={day} setDay={setDay} />
@@ -667,6 +678,8 @@ function SpeedChart({ trip, width }) {
 
 function TripModal({ trip, onClose, onMode }) {
   const [w, setW] = useState(0);
+  // Ayrıntı haritası: çizgi + kayıt noktaları (boncuk) + olay noktaları; yolculuk değişince bir kez hesaplanır
+  const view = useMemo(() => (trip ? { legs: tripLines(trip), marks: tripMarks(trip), dots: tripDots(trip) } : null), [trip]);
   const [steps, setSteps] = useState({}); // parça indeksi -> adım (yalnız yaya parçaları)
   // Yaya parçalarının adımını telefonun adımsayarından sor (son 7 gün için var).
   useEffect(() => {
@@ -692,7 +705,7 @@ function TripModal({ trip, onClose, onMode }) {
           </View>
         </View>
         <View style={{ height: 250 }}>
-          <MapPane legs={tripLines(trip)} stays={[]} marks={tripMarks(trip)} fitKey={'trip' + trip.t0} pad={{ top: 40, right: 40, bottom: 40, left: 40 }} />
+          <MapPane legs={view.legs} stays={[]} marks={view.marks} dots={view.dots} fitKey={'trip' + trip.t0} pad={{ top: 40, right: 40, bottom: 40, left: 40 }} />
         </View>
         <ScrollView contentContainerStyle={{ padding: 14, paddingBottom: 40 }}>
           <Card>
@@ -735,8 +748,8 @@ function TripModal({ trip, onClose, onMode }) {
           </Card>
           <Card title="TÜR YANLIŞSA DÜZELT">
             <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
-              <Chip label="Otomatik" active={!trip.overridden} onPress={() => onMode(trip, null)} />
-              {MODES.map((m) => <Chip key={m} label={MODE[m].label} color={MODE[m].color} active={trip.overridden && trip.mode === m} onPress={() => onMode(trip, m)} />)}
+              <Chip label="Otomatik" active={!trip.override} onPress={() => onMode(trip, null)} />
+              {MODES.map((m) => <Chip key={m} label={MODE[m].label} color={MODE[m].color} active={trip.override === m} onPress={() => onMode(trip, m)} />)}
             </View>
           </Card>
         </ScrollView>

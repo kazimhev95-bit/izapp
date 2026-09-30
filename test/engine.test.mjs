@@ -184,6 +184,17 @@ const busRide = drive([[150, 1.35], [180, 0], ...hops(12, 45, 9, 20), [110, 1.35
 const Bz = analyze([...busRide.pts, ...stayAt(busRide.end + 20e3, 150 * 1.35 + 12 * 45 * 9 + 110 * 1.35, 8)], { from: 0, to: 3 * 3600e3 });
 ok(legsOf(Bz) === 'walk+bus+walk', 'yürü + bekle + otobüs + yürü: ' + legsOf(Bz));
 
+// Tür düzeltmesi parçaları korumalı (1 Eki: "Otobüs" seçilmiş yolculukta yürüyüş de turuncu çiziliyordu)
+{
+  const t0 = Bz.items.find((i) => i.type === 'trip').t0;
+  const ovOf = (ov) => analyze([...busRide.pts, ...stayAt(busRide.end + 20e3, 150 * 1.35 + 12 * 45 * 9 + 110 * 1.35, 8)], { from: 0, to: 3 * 3600e3, overrides: { [t0]: ov } });
+  const O1 = ovOf('bus'), O2 = ovOf('car'), t3 = ovOf('walk').items.find((i) => i.type === 'trip');
+  const t1 = O1.items.find((i) => i.type === 'trip');
+  ok(legsOf(O1) === 'walk+bus+walk' && !t1.overridden && t1.override === 'bus', 'aynı türle düzeltme parçaları bozmuyor: ' + legsOf(O1));
+  ok(legsOf(O2) === 'walk+car+walk', 'araç türü düzeltmesi yürüyüşleri koruyor: ' + legsOf(O2));
+  ok(t3.overridden && t3.mode === 'walk', 'yaya düzeltmesi bütün yolculuğu yaya yapıyor');
+}
+
 // Koşu: hareket işlemcisi "koşuyor" diyor, 3,2 m/sn ile 2 km. Araç/bisiklet SANILMAMALI.
 const jog = drive([[640, 3.2]]);
 const jogActs = []; for (let t = 0; t <= jog.end; t += 60e3) jogActs.push({ t, k: 'R', c: 2 });
@@ -234,9 +245,21 @@ ok(pzTrip && pzTrip.legs.length === 1 && pzTrip.legs[0].waits.length === 1, 'bek
   const F = fuseSnap(trace, [{ g: 0, c: road }], 'walk');
   const dev = Math.max(...F.pts.map((q, i) => Math.hypot((q.lat - trace[i].lat) * 111320, (q.lon - trace[i].lon) * D)));
   // dikenin dibindeki nokta dikenin eteğine oturabilir (o da "yol"); ama çizgi dikenin ucuna (60 m) gitmemeli
-  const offs = F.pts.map((q) => Math.abs(q.lat - 40.4) * 111320), bumped = offs.filter((o) => o > 1).length;
+  const offs = F.pts.map((q) => Math.abs(q.lat - 40.4) * 111320), bumped = offs.filter((o) => o > 2.5).length;
   ok(dev <= 12.5, 'birleşik çizgi izden en çok 12 m sapıyor: ' + dev.toFixed(1) + ' m');
-  ok(bumped <= 2 && Math.max(...offs) <= 12.5 && F.d < 520, 'zikzak kalktı (' + bumped + ' nokta yoldan >1 m), diken izlenmedi (uzunluk ' + F.d.toFixed(0) + ' m)');
+  ok(bumped <= 2 && Math.max(...offs) <= 12.5 && F.d < 520, 'zikzak kalktı (' + bumped + ' nokta yoldan >2,5 m), diken izlenmedi (uzunluk ' + F.d.toFixed(0) + ' m)');
+  // Bina kenarı kayması: iz yolun hep 20 m güneyinde (telefon ±5 m diyor). Yayada çizgi 12 m'de, düz; otobüste yolda.
+  const shifted = []; for (let x = 0; x <= 400; x += 8) shifted.push({ lat: 40.4 - 20 / 111320 + ((x / 8) % 3 - 1) * 2 / 111320, lon: 49.85 + x / D, acc: 5 });
+  const flat = [{ g: 0, c: [[40.4, 49.85], [40.4, 49.85 + 400 / D]] }];
+  const Sw = fuseSnap(shifted, flat, 'walk').pts.map((q) => (40.4 - q.lat) * 111320), Sb = fuseSnap(shifted, flat, 'bus').pts.map((q) => (40.4 - q.lat) * 111320);
+  ok(Math.min(...Sw) >= 10.5 && Math.max(...Sw) <= 13, 'yayada hep aynı yana kayma kırpıldı, taraf korundu: ' + Math.min(...Sw).toFixed(1) + '–' + Math.max(...Sw).toFixed(1) + ' m güneyde');
+  ok(Math.max(...Sb.map(Math.abs)) <= 1, 'otobüste aynı kayma: çizgi tam yolda (en çok ' + Math.max(...Sb.map(Math.abs)).toFixed(1) + ' m)');
+  // Sunucu dolambaç önermiş: yol 200-300 m arası 60 m kuzeye kıvrılıyor, iz düz gidiyor → çizgi dolambacı izlememeli
+  const loopRoad = [{ g: 0, c: [[40.4, 49.85], [40.4, 49.85 + 200 / D], [40.4 + 60 / 111320, 49.85 + 200 / D], [40.4 + 60 / 111320, 49.85 + 300 / D], [40.4, 49.85 + 300 / D], [40.4, 49.85 + 500 / D]] }];
+  const straight = []; for (let x = 0; x <= 500; x += 10) straight.push({ lat: 40.4, lon: 49.85 + x / D, acc: 6 });
+  const Lp = fuseSnap(straight, loopRoad, 'walk');
+  const up = Math.max(...Lp.pts.flatMap((q) => [q, ...(q.via || []).map(([la, lo]) => ({ lat: la, lon: lo }))]).map((q) => (q.lat - 40.4) * 111320));
+  ok(up <= 13 && Lp.d < 540, 'dolambaçlı eşleştirme izlenmedi (kuzeye en çok ' + up.toFixed(1) + ' m, uzunluk ' + Lp.d.toFixed(0) + ' m)');
   // Seyrek noktada köşe: L biçimli yol (doğu 300 m, sonra kuzey 300 m); noktalar 60 m arayla köşeyi keser
   const L1 = [[40.4, 49.85], [40.4, 49.85 + 300 / D], [40.4 + 300 / 111320, 49.85 + 300 / D]];
   const sparse = [[0, 0], [60, 0], [120, 0], [180, 0], [240, 0], [290, 25], [300, 85], [300, 145], [300, 205], [300, 265]].map(([x, y]) => ({ lat: 40.4 + y / 111320, lon: 49.85 + x / D }));

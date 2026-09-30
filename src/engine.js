@@ -228,6 +228,11 @@ function makeTrip(p, a, b, actAt) {
     }
   }
 
+  // Beklemeler: yerinde durulan süre boyunca noktalar tek yere (ortanca) sabitlenir — dururken GPS'in
+  // gezinmesi çizgide "gidip gelme", mesafede de sahte yol olarak görünmesin. Ham noktalar (raw) aynen kalır.
+  const waits = findWaits(p, a, b);
+  for (const w of waits) for (let k = w.i0; k <= w.i1; k++) sp[k - a] = { ...sp[k - a], lat: w.lat, lon: w.lon, v: 0 };
+
   // Parçalar: mesafe düzeltilmiş izden. Hız: sık noktalarda düzeltilmiş (Kalman) hız; iki nokta arası
   // uzunsa (duruş: hareketsizken nokta gelmez) ya da kayıt boşluğuysa uçtan uca ortalama.
   const segs = [];
@@ -341,7 +346,6 @@ function makeTrip(p, a, b, actAt) {
   });
   coalesce('mode');
 
-  const waits = findWaits(p, a, b);
   const legs = runs.map((r) => {
     // Araç parçasındaki duruşlar (ışık, durak). İki biçimde görünür:
     //  (a) sık noktalarda hız STOP_V altına iner ve en az STOP_MIN sürer,
@@ -381,23 +385,68 @@ function makeTrip(p, a, b, actAt) {
   return trip;
 }
 
-// Beklemeler: yolculuk içinde yerinde durulan anlar (ışıkta, durakta, yaya olarak beklerken).
-// Bir noktadan başlayıp WAIT_R içinde en az WAIT_MIN kalınırsa bekleme sayılır. Hareketsizken telefon yeni
-// nokta yazmadığı için bekleme çoğu zaman "uzun aralıklı ama yerinde" iki nokta olarak görünür.
-// Kaba konumda (otobüs içi ±50 m) yarıçap doğrulukla büyür — yoksa yerinde titreşme "hareket" sanılır.
+// Beklemeler: yolculuk içinde yerinde durulan anlar (ışıkta, durakta, yaya olarak beklerken). İki biçimde:
+//  (a) sıkı öbek: bir noktadan başlayıp WAIT_R içinde en az WAIT_MIN kalınır. Hareketsizken telefon yeni nokta
+//      yazmadığı için çoğu zaman "uzun aralıklı ama yerinde" iki nokta olarak görünür. Kaba konumda
+//      (otobüs içi ±50 m) yarıçap doğrulukla büyür.
+//  (b) yerinde sayma: telefon dururken GPS hız ölçemez ve konum 30-70 m gezinir (30 Eyl, durakta 4 dk:
+//      noktalar köşenin kuzeyinde gezindi, telefon ±16-33 m diyordu; çizgi "yukarı gidip geri geldi" gibi
+//      çiziliyordu). Kural: hızı ölçülmemiş (ya da < 0,8 m/s) en az 3 ardışık nokta, en az 1 dk ve ilk üçte
+//      birlik ile son üçte birlik arasında ilerleme < 0,25 m/s (yürüyen biri hızı ölçülmese de ilerler).
+//      Uçlardaki varış/kalkış noktaları (öncekinden/sonrakinden > 2,5 m/s ile gelen) beklemeye katılmaz.
+// Çakışanlar birleştirilir; merkez noktaların ORTANCASI (tek sıçrayan nokta merkezi kaydırmasın).
+// Dönüş: [{t0, t1, lat, lon, i0, i1}] (i0..i1: p içindeki nokta aralığı)
 function findWaits(p, a, b) {
-  const out = [];
+  const win = [];
   for (let i = a; i < b;) {
     let j = i;
     while (j + 1 <= b && !p[j + 1].syn && hav(p[i], p[j + 1]) <= Math.max(CFG.WAIT_R, 0.8 * Math.min(p[i].acc || 0, p[j + 1].acc || 0))) j++;
-    if (j > i && !p[i].syn && p[j].t - p[i].t >= CFG.WAIT_MIN) {
-      let la = 0, lo = 0;
-      for (let k = i; k <= j; k++) { la += p[k].lat; lo += p[k].lon; }
-      out.push({ t0: p[i].t, t1: p[j].t, lat: la / (j - i + 1), lon: lo / (j - i + 1) });
-      i = j;
-    } else i++;
+    if (j > i && !p[i].syn && p[j].t - p[i].t >= CFG.WAIT_MIN) { win.push([i, j]); i = j; } else i++;
   }
-  return out;
+  const still = (q) => !q.syn && (q.spd == null || q.spd < 0.8);
+  const vImp = (x, y) => hav(p[x], p[y]) / Math.max(1, (p[y].t - p[x].t) / 1000);
+  const med = (arr) => quantile(arr, 0.5);
+  for (let i = a; i <= b;) {
+    if (!still(p[i])) { i++; continue; }
+    let j = i;
+    while (j + 1 <= b && still(p[j + 1])) j++;
+    let s0 = i, e0 = j;
+    while (s0 < e0 && ((s0 > a && vImp(s0 - 1, s0) > 2.5) || vImp(s0, s0 + 1) > 2.5)) s0++;
+    while (e0 > s0 && vImp(e0 - 1, e0) > 2.5) e0--;
+    const n = e0 - s0 + 1, k = Math.floor(n / 3);
+    if (n >= 3 && p[e0].t - p[s0].t >= CFG.WALK_MIN_DT) {
+      const A = p.slice(s0, s0 + k), C = p.slice(e0 - k + 1, e0 + 1);
+      const ca = { lat: med(A.map((q) => q.lat)), lon: med(A.map((q) => q.lon)) }, cc = { lat: med(C.map((q) => q.lat)), lon: med(C.map((q) => q.lon)) };
+      const dt = (C.reduce((x, q) => x + q.t, 0) / k - A.reduce((x, q) => x + q.t, 0) / k) / 1000;
+      if (hav(ca, cc) / Math.max(1, dt) < 0.25) win.push([s0, e0]);
+    }
+    i = j + 1;
+  }
+  win.sort((x, y) => x[0] - y[0]);
+  const merged = [];
+  for (const w of win) { const m = merged[merged.length - 1]; if (m && w[0] <= m[1]) m[1] = Math.max(m[1], w[1]); else merged.push([...w]); }
+  return merged.map(([i0, i1]) => {
+    const q = p.slice(i0, i1 + 1).filter((x) => !x.syn);
+    return { t0: p[i0].t, t1: p[i1].t, lat: med(q.map((x) => x.lat)), lon: med(q.map((x) => x.lon)), i0, i1 };
+  });
+}
+
+// Kullanıcının tür düzeltmesi (it.override). Çok parçalı yolculukta parçalar korunur:
+//  • düzeltme otomatik türle aynıysa hiçbir şey değişmez (eski sürümde "Otobüs" seçilmiş yolculuk yürüyüş
+//    parçalarını da otobüs rengine boyuyor, indi/bindi noktalarını gizliyordu — 1 Eki şikâyeti),
+//  • hem yürüyüş hem araç parçası varsa araç türü düzeltmesi (otobüs/araba/metro) yalnız araç parçalarını
+//    değiştirir, yürüyüşler kalır,
+//  • yaya/bisiklet düzeltmesi ya da tek türlü yolculuk: bütün yolculuk tek tür sayılır (overridden).
+function applyOverride(it, ov) {
+  it.override = ov; it.autoMode = it.mode;
+  if (ov === it.mode) return;
+  const mixed = it.legs.some((l) => l.mode === 'walk') && it.legs.some((l) => l.mode !== 'walk');
+  if (mixed && ov !== 'walk' && ov !== 'bike') {
+    for (const l of it.legs) if (l.mode !== 'walk') l.mode = ov;
+    setTripMode(it);
+    return;
+  }
+  it.mode = ov; it.overridden = true;
 }
 
 // Yolculuğun ana türü: en çok mesafe kat edilen parça türü.
@@ -628,7 +677,7 @@ export function analyze(rawPoints, opt) {
     it.fromStay = all[i - 1] && all[i - 1].type === 'stay' ? all[i - 1] : null;
     it.toStay = all[i + 1] && all[i + 1].type === 'stay' ? all[i + 1] : null;
     const k = ovKeys.find((t) => Math.abs(t - it.t0) <= 120e3);
-    if (k !== undefined) { it.autoMode = it.mode; it.mode = overrides[k]; it.overridden = true; }
+    if (k !== undefined) applyOverride(it, overrides[k]);
   });
   const places = buildPlaces(all.filter((x) => x.type === 'stay'), saved, from, to, detect, hints);
 
