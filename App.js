@@ -136,6 +136,7 @@ const tripStops = (trip) => trip.legs.reduce((n, l) => n + (l.mode === 'car' || 
 function HaritaTab({ data, day, setDay, trk, onToggle, onPlace, me, steps }) {
   const [centerTick, setCenterTick] = useState(0);   // konum düğmesine her basışta artar
   const [showRaw, setShowRaw] = useState(false);     // ham (düzeltilmemiş) izi de göster
+  const [follow, setFollow] = useState(false);       // takip: harita canlı konumla birlikte kayar
   // Yolculuklar: düzeltilmiş + türe göre renkli. İstenirse altına ham iz (ince gri) eklenir.
   const lines = useMemo(() => data.items.filter((i) => i.type === 'trip').flatMap(tripLines), [data]);
   const legs = useMemo(() => (showRaw ? [...data.track.map((l) => ({ mode: 'raw', coords: toCoords(l) })), ...lines] : lines), [lines, showRaw, data]);
@@ -146,7 +147,8 @@ function HaritaTab({ data, day, setDay, trk, onToggle, onPlace, me, steps }) {
   const pos = isToday ? me || (data.lastPt && data.lastPt.t >= day ? data.lastPt : null) : null;
   return (
     <View style={{ flex: 1 }}>
-      <MapPane legs={legs} stays={stays} fitKey={String(day)} me={pos} centerTick={centerTick} onStayPress={(m) => onPlace(m.place)} />
+      <MapPane legs={legs} stays={stays} fitKey={String(day)} me={pos} centerTick={centerTick} follow={follow && isToday}
+        onUserDrag={() => setFollow(false)} onStayPress={(m) => onPlace(m.place)} />
       <View style={[s.overlayTop, { top: TOP }]}>
         <DateBar day={day} setDay={setDay} />
         <View style={{ flexDirection: 'row', alignItems: 'flex-start' }}>
@@ -161,9 +163,11 @@ function HaritaTab({ data, day, setDay, trk, onToggle, onPlace, me, steps }) {
             <Text style={s.recTx}>{pos ? (pos.spd != null ? Math.round(pos.spd * 3.6) + ' km/s' : '— km/s') + ' · ±' + Math.round(pos.acc || 0) + ' m' : trk.fg ? 'konum bekleniyor' : 'izin yok'}</Text>
           </View>
           <View style={{ gap: 8 }}>
-            {/* Konumuma git: haritayı şu an bulunduğum noktaya ortalar */}
-            <TouchableOpacity style={[s.locBtn, !pos && { opacity: 0.5 }]} disabled={!pos} onPress={() => setCenterTick(centerTick + 1)}>
-              <Feather name="navigation" size={18} color={C.accent} />
+            {/* Konumuma git + takip: haritayı bulunduğum noktaya ortalar ve ben yürüdükçe birlikte kaydırır.
+                Haritayı elle kaydırınca takip bırakılır. */}
+            <TouchableOpacity style={[s.locBtn, !pos && { opacity: 0.5 }, follow && { backgroundColor: C.accent, borderColor: C.accent }]} disabled={!pos}
+              onPress={() => { setCenterTick(centerTick + 1); setFollow(true); }}>
+              <Feather name="navigation" size={18} color={follow ? C.onAccent : C.accent} />
             </TouchableOpacity>
             {/* Ham iz katmanı: GPS'in verdiği düzeltilmemiş noktaları ince gri çizgiyle gösterir/gizler */}
             <TouchableOpacity style={[s.locBtn, { marginTop: 0 }, showRaw && { borderColor: C.accent }]} onPress={() => setShowRaw(!showRaw)}>
@@ -715,7 +719,10 @@ export default function App() {
     return () => clearInterval(id);
   }, [active]);
 
-  const data = useMemo(() => loadRange(day, addDays(day, 1), trk.running, hints, false), [day, rev, tick, trk.running, hints]);
+  // Günün analizi pahalıdır (binlerce nokta düzeltilir). Her 4 sn'de yeniden yapmak yerine yalnız veri
+  // değiştiğinde (yeni nokta geldi) ya da dakikada bir (süren durağın süresi güncellensin) yapılır.
+  const ver = useMemo(() => store.rangeVersion(addDays(day, -1), addDays(day, 2)) + ':' + Math.floor(Date.now() / 60e3), [day, tick, rev]);
+  const data = useMemo(() => loadRange(day, addDays(day, 1), trk.running, hints, false), [day, rev, ver, trk.running, hints]);
 
   // Seçili günün adım sayısı (telefonun adımsayarı; son 7 gün). Dakikada bir tazelenir.
   const stepSlot = Math.floor(tick / 15);

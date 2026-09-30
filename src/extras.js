@@ -9,6 +9,8 @@ import { getPoints, getActivity } from './store';
 export async function stepsBetween(a, b) {
   try {
     if (b <= a || !(await Pedometer.isAvailableAsync())) return null;
+    // İzin henüz verilmediyse SORMA (izin penceresi kayıt başlatılırken açılır); sessizce boş dön.
+    if (!(await Pedometer.getPermissionsAsync()).granted) return null;
     const r = await Pedometer.getStepCountAsync(new Date(a), new Date(b));
     return r && typeof r.steps === 'number' ? r.steps : null;
   } catch (e) { return null; }

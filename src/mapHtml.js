@@ -1,7 +1,7 @@
 // Harita sayfası (Leaflet + OpenStreetMap, açık yumuşak ton). Telefonda WebView, önizlemede iframe
 // içinde AYNI sayfa çalışır — önizlemede ne görünüyorsa telefonda da o görünür.
-// Veri dışarıdan izSet({legs, stays, fit, pad}) ile, canlı konum izMe({mePos, acc, center}) ile gelir;
-// durağa dokunma {stay: key} olarak döner.
+// Veri dışarıdan izSet({legs, stays, fit, pad}) ile, canlı konum izMe({mePos, acc, center, follow}) ile gelir;
+// durağa dokunma {stay: key}, haritayı elle kaydırma {drag: 1} olarak döner.
 export const MAP_HTML = `<!doctype html>
 <html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
@@ -27,6 +27,7 @@ export const MAP_HTML = `<!doctype html>
     // Canlı konum noktası: rota katmanından ayrı durur, her konum güncellemesinde yalnız o kayar.
     var meM=null,meA=null;
     window.izMe=function(d){
+      if(d.clear){if(meM){map.removeLayer(meM);map.removeLayer(meA);meM=null;meA=null;}return;} // başka güne bakılıyor: noktayı kaldır
       var p=d.mePos;
       if(!meM){
         meA=L.circle(p,{radius:d.acc||0,color:'#2E7CF6',weight:0,fillColor:'#2E7CF6',fillOpacity:.12,interactive:false}).addTo(map);
@@ -34,12 +35,15 @@ export const MAP_HTML = `<!doctype html>
       }else{meM.setLatLng(p);meA.setLatLng(p);meA.setRadius(d.acc||0);}
       meM.bringToFront();
       if(d.center)map.setView(p,Math.max(map.getZoom(),16));
+      else if(d.follow)map.panTo(p,{animate:true,duration:0.5}); // takip: harita konumla birlikte kayar
     };
+    // Kullanıcı haritayı eliyle kaydırırsa takip bırakılır (uygulamaya haber ver).
+    map.on('dragstart',function(){send({drag:1});});
     window.izSet=function(d){
       g.clearLayers();
       var all=[];
       d.legs.forEach(function(l){
-        // smoothFactor 0: çizgi sadeleştirilmez, kaydedilen her nokta aynen çizilir
+        // smoothFactor 0: Leaflet ayrıca sadeleştirmesin (düzeltme + sadeleştirme uygulamada yapıldı)
         L.polyline(l.pts,{color:l.color,weight:l.w,lineCap:'round',lineJoin:'round',smoothFactor:0,dashArray:l.dash?'8 8':null}).addTo(g);
         all=all.concat(l.pts);
       });
@@ -49,7 +53,7 @@ export const MAP_HTML = `<!doctype html>
       });
       if(d.fit&&all.length){map.invalidateSize();map.fitBounds(all,{paddingTopLeft:[d.pad.left,d.pad.top],paddingBottomRight:[d.pad.right,d.pad.bottom],maxZoom:17});}
     };
-    window.addEventListener('message',function(e){try{var d=JSON.parse(e.data);if(d&&d.legs)window.izSet(d);else if(d&&d.mePos)window.izMe(d);}catch(x){}});
+    window.addEventListener('message',function(e){try{var d=JSON.parse(e.data);if(d&&d.legs)window.izSet(d);else if(d&&(d.mePos||d.clear))window.izMe(d);}catch(x){}});
     send({ready:1});
   }
 </script></body></html>`;

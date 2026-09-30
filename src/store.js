@@ -36,6 +36,8 @@ export function getPoints(a, b, step = 0) {
   if (!step) return db().getAllSync('SELECT t, lat, lon, acc, spd, crs FROM points WHERE t >= ? AND t < ? ORDER BY t', a, b);
   return db().getAllSync('SELECT MIN(t) AS t, lat, lon, acc, spd, crs FROM points WHERE t >= ? AND t < ? GROUP BY t / ? ORDER BY t', a, b, step);
 }
+// Aralıktaki verinin "sürümü": nokta sayısı + son zaman. Değişmediyse analizi yeniden yapmaya gerek yok.
+export function rangeVersion(a, b) { const r = db().getFirstSync('SELECT COUNT(*) AS n, MAX(t) AS m FROM points WHERE t >= ? AND t < ?', a, b); return r.n + ':' + (r.m || 0); }
 export function pointStats() { return db().getFirstSync('SELECT COUNT(*) AS n, MIN(t) AS first, MAX(t) AS last FROM points'); }
 
 export function getPlaces() { return db().getAllSync('SELECT id, lat, lon, name, kind, addr FROM places'); }

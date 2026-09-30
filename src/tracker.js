@@ -61,7 +61,10 @@ function keep(locations) {
   for (const l of locations) {
     const p = toPoint(l);
     if (lastKept && p.t <= lastKept.t) continue; // eski ya da diğer kaynaktan zaten gelmiş
-    if (!lastKept || dist(lastKept, p) >= minDist || p.t - lastKept.t >= KEEPALIVE_MS) { out.push(p); lastKept = p; }
+    // Gereken yer değiştirme: profilin mesafesi; konum kabaysa (bina içi, kısık kip) doğruluğun ~%40'ı —
+    // yoksa yerinde dururken GPS'in sağa sola oynaması binlerce gereksiz nokta üretir.
+    const need = Math.max(minDist, (p.acc || 0) * 0.4);
+    if (!lastKept || dist(lastKept, p) >= need || p.t - lastKept.t >= KEEPALIVE_MS) { out.push(p); lastKept = p; }
   }
   if (out.length) insertPoints(out);
   return out.length;

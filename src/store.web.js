@@ -13,6 +13,7 @@ export function getPoints(a, b, step = 0) {
   let last = -1; // her step'lik dilimden ilk nokta (store.js ile aynı davranış)
   return r.filter((p) => { const k = Math.floor(p.t / step); if (k === last) return false; last = k; return true; });
 }
+export function rangeVersion(a, b) { const r = getPoints(a, b); return r.length + ':' + (r.length ? r[r.length - 1].t : 0); }
 export function pointStats() { return { n: points.length, first: points[0]?.t ?? null, last: points[points.length - 1]?.t ?? null }; }
 
 export function getPlaces() { return places.map((p) => ({ ...p })); }

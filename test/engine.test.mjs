@@ -120,5 +120,48 @@ console.log('boşluk:', E.items.map((i) => `${i.type}${i.type === 'trip' ? ' ' +
 ok(es.type === 'stay' && Math.abs(es.t1 - (tB - 86e3)) < 5e3, 'durak, tahmini çıkış anında bitiyor (boşluğun başında değil)');
 ok(et && et.type === 'trip' && et.mode === 'walk' && et.dist > 350 && et.dash[0] === true && et.dash.filter(Boolean).length === 1, 'ilk 120 m tahmini (kesikli), gerisi kayıtlı yürüyüş');
 
+// Pil tasarrufu kipi: 2 saat yerinde duruyor, konum kaba (±65 m) ve 20–70 m oynuyor. Hareket SANILMAMALI.
+{
+  let seed = 11; const rnd = () => { seed = (seed * 1664525 + 1013904223) % 4294967296; return seed / 4294967296; };
+  const c = [];
+  for (let t = 0; t <= 2 * 3600e3; t += 40e3 + rnd() * 200e3) c.push({ t: Math.round(t), lat: 40.4 + (rnd() - 0.5) * 120 / 111195, lon: 49.85 + (rnd() - 0.5) * 120 / 85000, acc: 65, spd: null, crs: null });
+  const Cz = analyze(c, { from: 0, to: 3 * 3600e3 });
+  ok(Cz.items.length === 1 && Cz.items[0].type === 'stay' && Cz.totals.trips === 0, 'kaba konum oynaması hareket sayılmıyor: ' + Cz.items.map((i) => i.type).join(','));
+}
+
+// ---- Dur-kalk senaryoları (hareket kaydı YOK, yalnız hız): doğuya düz yol, 3 m mesafe süzgeci ----
+// plan: [süre sn, hız m/sn] parçaları. Hız 0 iken nokta çıkmaz (telefon duruyor).
+function drive(plan, t0 = 0) {
+  const pts = []; let t = t0, x = 0, lastX = -9;
+  pts.push({ t, lat: 40.4, lon: 49.85, acc: 6, spd: 0, crs: -1 });
+  for (const [dur, v] of plan) {
+    for (let s = 0; s < dur; s++) {
+      t += 1000; x += v;
+      if (x - lastX >= 3) { pts.push({ t, lat: 40.4, lon: 49.85 + x / 85000, acc: 6, spd: v, crs: 90 }); lastX = x; }
+    }
+  }
+  return { pts, end: t };
+}
+const stayAt = (t0, x, mins) => { const o = []; for (let i = 0; i <= mins * 3; i++) o.push({ t: t0 + i * 20e3, lat: 40.4, lon: 49.85 + x / 85000, acc: 6, spd: 0, crs: -1 }); return o; };
+const hops = (n, go, v, stop) => Array.from({ length: n }, () => [[go, v], [stop, 0]]).flat();
+const legsOf = (X) => X.items.filter((i) => i.type === 'trip').map((t) => t.legs.map((l) => l.mode).join('+')).join(' | ');
+
+// Yoğun trafikte araba: kapıdan biniliyor, 25 sn git / 40 sn dur × 20. Yaya ya da otobüs SANILMAMALI.
+const jam = drive(hops(20, 25, 6, 40));
+const J = analyze([...jam.pts, ...stayAt(jam.end + 20e3, 20 * 25 * 6, 8)], { from: 0, to: 3 * 3600e3 });
+const jt = J.items.find((i) => i.type === 'trip');
+ok(legsOf(J) === 'car', 'dur-kalk trafikte araba: ' + legsOf(J) + ' (' + (jt ? jt.legs[0].stops : '?') + ' duruş)');
+
+// Durağa 200 m yürü, 3 dk bekle (durak sayılmayacak kadar kısa), otobüs 45 sn git / 20 sn dur × 12, 150 m yürü.
+const busRide = drive([[150, 1.35], [180, 0], ...hops(12, 45, 9, 20), [110, 1.35]]);
+const Bz = analyze([...busRide.pts, ...stayAt(busRide.end + 20e3, 150 * 1.35 + 12 * 45 * 9 + 110 * 1.35, 8)], { from: 0, to: 3 * 3600e3 });
+ok(legsOf(Bz) === 'walk+bus+walk', 'yürü + bekle + otobüs + yürü: ' + legsOf(Bz));
+
+// Koşu: hareket işlemcisi "koşuyor" diyor, 3,2 m/sn ile 2 km. Araç/bisiklet SANILMAMALI.
+const jog = drive([[640, 3.2]]);
+const jogActs = []; for (let t = 0; t <= jog.end; t += 60e3) jogActs.push({ t, k: 'R', c: 2 });
+const Jg = analyze([...jog.pts, ...stayAt(jog.end + 20e3, 640 * 3.2, 8)], { from: 0, to: 3 * 3600e3, acts: jogActs });
+ok(legsOf(Jg) === 'walk', 'koşu (hareket kaydıyla) yaya sayılır: ' + legsOf(Jg));
+
 console.log(fail ? `\n${fail} HATA` : '\nTÜMÜ GEÇTİ');
 process.exit(fail ? 1 : 0);

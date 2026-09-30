@@ -5,7 +5,7 @@ import { LINE } from './theme';
 import { MAP_HTML, mapPayload } from './mapHtml';
 
 export default function MapPane(props) {
-  const { legs, stays, fitKey, onStayPress, me, centerTick } = props;
+  const { legs, stays, fitKey, onStayPress, me, centerTick, follow } = props;
   const ref = useRef(null), lastFit = useRef(null), live = useRef(props);
   const [ready, setReady] = useState(false);
   live.current = props;
@@ -16,6 +16,7 @@ export default function MapPane(props) {
       if (!ref.current || e.source !== ref.current.contentWindow) return;
       let m; try { m = JSON.parse(e.data); } catch (x) { return; }
       if (m.ready) setReady(true);
+      if (m.drag && live.current.onUserDrag) live.current.onUserDrag();
       if (m.stay && live.current.onStayPress) { const s = live.current.stays.find((x) => x.key === m.stay); if (s) live.current.onStayPress(s); }
     };
     window.addEventListener('message', h);
@@ -32,10 +33,11 @@ export default function MapPane(props) {
   // Canlı konum noktası (MapPane.js ile aynı mantık)
   const lastTick = useRef(centerTick), centered = useRef(false);
   useEffect(() => {
-    if (!ready || !ref.current || !me) return;
+    if (!ready || !ref.current) return;
+    if (!me) { ref.current.contentWindow.postMessage(JSON.stringify({ clear: 1 }), '*'); return; }
     const center = lastTick.current !== centerTick || (!centered.current && !legs.length && !stays.length);
     lastTick.current = centerTick; centered.current = true;
-    ref.current.contentWindow.postMessage(JSON.stringify({ mePos: [me.lat, me.lon], acc: me.acc, center }), '*');
+    ref.current.contentWindow.postMessage(JSON.stringify({ mePos: [me.lat, me.lon], acc: me.acc, center, follow: !!follow }), '*');
   }, [ready, me, centerTick]);
 
   return (

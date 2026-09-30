@@ -7,7 +7,7 @@ import { LINE } from './theme';
 import { MAP_HTML, mapPayload } from './mapHtml';
 
 export default function MapPane(props) {
-  const { legs, stays, fitKey, onStayPress, me, centerTick } = props;
+  const { legs, stays, fitKey, onStayPress, me, centerTick, follow } = props;
   const ref = useRef(null), lastFit = useRef(null);
   const [ready, setReady] = useState(false);
 
@@ -24,15 +24,17 @@ export default function MapPane(props) {
   // (centerTick) ya da gösterilecek rota yokken ilk konum gelince harita oraya ortalanır.
   const lastTick = useRef(centerTick), centered = useRef(false);
   useEffect(() => {
-    if (!ready || !ref.current || !me) return;
+    if (!ready || !ref.current) return;
+    if (!me) { ref.current.injectJavaScript('window.izMe({clear:1});true;'); return; }
     const center = lastTick.current !== centerTick || (!centered.current && !legs.length && !stays.length);
     lastTick.current = centerTick; centered.current = true;
-    ref.current.injectJavaScript('window.izMe(' + JSON.stringify({ mePos: [me.lat, me.lon], acc: me.acc, center }) + ');true;');
+    ref.current.injectJavaScript('window.izMe(' + JSON.stringify({ mePos: [me.lat, me.lon], acc: me.acc, center, follow: !!follow }) + ');true;');
   }, [ready, me, centerTick]);
 
   const onMessage = (e) => {
     let m; try { m = JSON.parse(e.nativeEvent.data); } catch (x) { return; }
     if (m.ready) setReady(true);
+    if (m.drag && props.onUserDrag) props.onUserDrag();
     if (m.stay && onStayPress) { const s = stays.find((x) => x.key === m.stay); if (s) onStayPress(s); }
   };
 
