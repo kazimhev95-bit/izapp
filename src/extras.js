@@ -35,7 +35,7 @@ export async function exportData(from, to) {
   lines.push('S,k,n,last');
   const st = getStats();
   for (const k of Object.keys(st)) lines.push('S,' + k + ',' + st[k].n + ',' + (st[k].last || ''));
-  lines.push('K,profile,' + getKV('profile', 'birebir'), 'K,smart,' + getKV('smart', false));
+  lines.push('K,profile,' + getKV('profile', 'birebir'), 'K,smart,' + getKV('smart', true));
   const d = new Date();
   const f = new File(Paths.cache, 'iz-veri-' + d.getFullYear() + '-' + (d.getMonth() + 1) + '-' + d.getDate() + '.csv');
   f.create({ overwrite: true });

@@ -35,6 +35,13 @@ export function fmtDur(ms) {
   const h = Math.floor(m / 60), r = m % 60;
   return r ? h + ' sa ' + r + ' dk' : h + ' sa';
 }
+// Kısa süreler saniyeli: 45 sn · 1 dk 20 sn · 12 dk (bekleme süreleri için)
+export function fmtDurS(ms) {
+  const sec = Math.round(ms / 1000);
+  if (sec < 60) return sec + ' sn';
+  if (sec < 600) return Math.floor(sec / 60) + ' dk' + (sec % 60 ? ' ' + (sec % 60) + ' sn' : '');
+  return fmtDur(ms);
+}
 export const fmtKm = (m) => (m < 1000 ? Math.round(m) + ' m' : (m / 1000).toFixed(m < 10000 ? 1 : 0) + ' km');
 export const fmtKmh = (ms) => Math.round(ms * 3.6) + ' km/s';
 export const fmtInt = (n) => String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/g, ' '); // 12 345

@@ -4,6 +4,7 @@
 // Hareket kaydı:  { t: ms, k: 'A'|'C'|'R'|'W'|'S'|'U', c: 0..2 }  (telefonun hareket işlemcisinden:
 //                 A=araçta, C=bisiklet, R=koşu, W=yürüyüş, S=duruyor, U=bilinmiyor; c=güven)
 import { smoothTrack } from './smooth.js';
+import { fuseSnap } from './snapcore.js';
 
 // ---- Eşikler (tek yerde; sahada ayarlanacak değerler) ----
 export const CFG = {
@@ -48,6 +49,13 @@ export const CFG = {
   BUS_MAX_V: 20,          // m/s (72 km/s) — şehir içi otobüs bundan hızlı gitmez
   BUS_WALK_D: 100,        // m — araçtan önce/sonra en az bu kadar yürüyüş (durağa yürüme)
   BUS_WAIT_MAX: 20 * 60e3,// ms — araçtan önceki kısa durak "durakta bekleme" sayılır
+  WAIT_R: 15,             // m — yolculuk içinde bu yarıçapta kalınırsa "yerinde bekliyor" (kaba konumda büyür)
+  WAIT_MIN: 40e3,         // ms — en kısa bekleme (ışık, durak, yaya bekleme)
+  WALK_MIN_DT: 60e3,      // ms — araçtan inip yürüme: yürüme hızı en az bu kadar sürmeli…
+  WALK_MIN_V: 0.6,        // m/s — …ölçülen hız bunun üstünde (yerinde durmak yürüme değil, beklemedir)…
+  WALK_MAX_V: 3.5,        // m/s — …ve bu aralıkta hiç araç hızı ölçülmemiş olmalı (trafikte dur-kalk ≠ yürüyüş)
+  WALK_GAP: 6000,         // ms — hareket kaydı yokken GPS'e ancak iz kaliteliyse güvenilir: noktalar sık…
+  WALK_ACC: 20,           // m — …ve doğru olmalı (otobüste GPS seyrek + kaba: sürünmesi yürüyüş gibi görünür)
 };
 
 export const MODES = ['walk', 'bike', 'bus', 'car', 'metro'];
@@ -255,11 +263,30 @@ function makeTrip(p, a, b, actAt) {
   // 45 sn'lik her hamlesi, öncesindeki uzun bekleyişe katılıp koca yolculuk "yaya" çıkıyordu.)
   const veh = (r) => r && (r.c === 'F' || r.c === 'K');
   const p90 = (r) => { const ws = []; for (let k = r.a; k <= r.b; k++) ws.push(segs[k].ws); return quantile(ws, 0.9); };
+  // Gerçek yürüyüş mü (araçtan inip yürümek)? 1) Hareket algılayıcısı emin biçimde "yürüyor/koşuyor" diyorsa
+  // evet, "araçta" diyorsa hayır. 2) Algılayıcı emin değilse (cepte, otobüste çoğu zaman öyle — 30 Eyl kaydı)
+  // yalnız KALİTELİ GPS'e güvenilir: en az 1 dk, sık (≤ 6 sn arayla) ve doğru (≤ 20 m) noktalar, çoğunda
+  // ölçülmüş hız yürüme bandında ve aralıkta hiç araç hızı yok. Otobüste GPS seyrek ve kabadır; trafikte
+  // sürünmesi hız olarak yürüyüşe benzer ama bu kalite şartını geçemez.
+  const walked = (r) => {
+    let w = 0, au = 0;
+    for (let k = r.a; k <= r.b; k++) { const x = segs[k]; if (x.act === 'W' || x.act === 'R') w += x.dt; else if (x.act === 'A') au += x.dt; }
+    if (w >= r.dt * 0.3 && w > au) return true;
+    if (au >= r.dt * 0.3 || r.dt < CFG.WALK_MIN_DT) return false;
+    // yalnız iç noktalar: uçlar komşu (araç) koşusuyla ortaktır, araç hızını taşır
+    const q = p.slice(a + r.a + 1, a + r.b + 1).filter((x) => !x.syn), gaps = [];
+    if (q.length < 5) return false;
+    for (let i = 1; i < q.length; i++) gaps.push(q[i].t - q[i - 1].t);
+    const sp = q.filter((x) => x.spd != null && (x.acc == null || x.acc <= 25)).map((x) => x.spd);
+    if (quantile(q.map((x) => (x.acc == null ? 99 : x.acc)), 0.5) > CFG.WALK_ACC || quantile(gaps, 0.5) > CFG.WALK_GAP || sp.length < q.length * 0.5) return false;
+    const med = quantile(sp, 0.5);
+    return med >= CFG.WALK_MIN_V && med < CFG.WALK_V && sp.filter((v) => v >= CFG.WALK_MAX_V).length < 2; // tek sıçrama affedilir
+  };
   // 1) iki hızlı koşu arasındaki kısa ve yerinde yavaşlık = duruş (ışık, durak, sıkışık trafik) → araç.
   //    Böylece dur-kalk giden aracın kısa hamleleri tek bir uzun araç koşusunda birleşir.
   runs.forEach((r, i) => {
     const L = runs[i - 1], R = runs[i + 1];
-    if (r.c === 'S' && veh(L) && veh(R) && r.dt < CFG.WAIT_MAX && (r.d < CFG.STOP_D || r.d / (r.dt / 1000) < 0.55)) r.c = L.d >= R.d ? L.c : R.c;
+    if (r.c === 'S' && veh(L) && veh(R) && !walked(r) && r.dt < CFG.WAIT_MAX && (r.d < CFG.STOP_D || r.d / (r.dt / 1000) < 0.55)) r.c = L.d >= R.d ? L.c : R.c;
   });
   coalesce('c');
   // 2) sağlam olmayan hızlı koşular (GPS sıçraması, koşarak karşıya geçme) yayadır. Sağlam = ya uzun
@@ -274,7 +301,7 @@ function makeTrip(p, a, b, actAt) {
   // 3) yolculuğun başındaki/sonundaki birkaç adımlık yavaşlık (kapıdan araca) → araç
   [[0, 1], [runs.length - 1, runs.length - 2]].forEach(([i, j]) => {
     const r = runs[i], nb = runs[j];
-    if (r && r.c === 'S' && veh(nb) && r.dt < CFG.SHORT_RUN && r.d < CFG.DOOR_D) r.c = nb.c;
+    if (r && r.c === 'S' && veh(nb) && r.dt < CFG.SHORT_RUN && r.d < CFG.DOOR_D && !(r.dt >= CFG.WALK_MIN_DT && walked(r))) r.c = nb.c;
   });
   coalesce('c');
 
@@ -306,13 +333,15 @@ function makeTrip(p, a, b, actAt) {
     if (r.d >= 2 * nd) nb.forEach((x) => { x.mode = 'metro'; }); else r.mode = 'car';
   });
   // İki araç parçası arasındaki kısa/yerinde yavaşlık = bekleme (trafik, durak) -> araca kat.
+  // Ama gerçek yürüyüşse (araçtan inip 1-2 dk yürüyüp başka araca binmek) ayrı yaya parçası kalır.
   runs.forEach((r, i) => {
     const L = runs[i - 1], R = runs[i + 1];
-    if (r.mode !== 'walk' || !L || !R || L.mode === 'walk' || R.mode === 'walk') return;
+    if (r.mode !== 'walk' || !L || !R || L.mode === 'walk' || R.mode === 'walk' || walked(r)) return;
     if (r.dt < CFG.WAIT_MAX || r.avg < 0.55) r.mode = L.d >= R.d ? L.mode : R.mode;
   });
   coalesce('mode');
 
+  const waits = findWaits(p, a, b);
   const legs = runs.map((r) => {
     // Araç parçasındaki duruşlar (ışık, durak). İki biçimde görünür:
     //  (a) sık noktalarda hız STOP_V altına iner ve en az STOP_MIN sürer,
@@ -334,17 +363,41 @@ function makeTrip(p, a, b, actAt) {
       max: Math.max(quantile(ws, 0.95), r.d / (r.dt / 1000)), stops, stopMs,
       est: est > r.d * 0.5, // parçanın çoğu kayıt boşluğu/GPS'siz mi (tahmini)
       tailWait,             // sonunda yerinde bekleme (ms) — yürüyüşün sonunda durakta bekleme ipucu
+      waits: [],            // bu parçadaki beklemeler (aşağıda doldurulur)
     };
   });
+  // Her bekleme, orta anı hangi parçaya düşüyorsa ona aittir
+  for (const w of waits) { const m = (w.t0 + w.t1) / 2; (legs.find((l) => m >= l.t0 && m <= l.t1) || legs[legs.length - 1]).waits.push(w); }
   const dur = sp[n - 1].t - sp[0].t;
   const trip = {
     type: 'trip', t0: sp[0].t, t1: sp[n - 1].t, dist, dur, legs,
     avg: dist / (dur / 1000), max: Math.max(...legs.map((l) => l.max)),
     pts: sp,                                  // düzeltilmiş iz (her noktada v = hız)
+    raw: p.slice(a, b + 1),                   // ham noktalar (pts ile aynı sıra) — yola oturtmaya bunlar gider
+    waits,                                    // yerinde beklemeler [{t0, t1, lat, lon}]
     dash: segs.map((s) => s.kind !== 'move'), // parça parça: tahmini/GPS'siz mi (kesikli çizilir)
   };
   setTripMode(trip);
   return trip;
+}
+
+// Beklemeler: yolculuk içinde yerinde durulan anlar (ışıkta, durakta, yaya olarak beklerken).
+// Bir noktadan başlayıp WAIT_R içinde en az WAIT_MIN kalınırsa bekleme sayılır. Hareketsizken telefon yeni
+// nokta yazmadığı için bekleme çoğu zaman "uzun aralıklı ama yerinde" iki nokta olarak görünür.
+// Kaba konumda (otobüs içi ±50 m) yarıçap doğrulukla büyür — yoksa yerinde titreşme "hareket" sanılır.
+function findWaits(p, a, b) {
+  const out = [];
+  for (let i = a; i < b;) {
+    let j = i;
+    while (j + 1 <= b && !p[j + 1].syn && hav(p[i], p[j + 1]) <= Math.max(CFG.WAIT_R, 0.8 * Math.min(p[i].acc || 0, p[j + 1].acc || 0))) j++;
+    if (j > i && !p[i].syn && p[j].t - p[i].t >= CFG.WAIT_MIN) {
+      let la = 0, lo = 0;
+      for (let k = i; k <= j; k++) { la += p[k].lat; lo += p[k].lon; }
+      out.push({ t0: p[i].t, t1: p[j].t, lat: la / (j - i + 1), lon: lo / (j - i + 1) });
+      i = j;
+    } else i++;
+  }
+  return out;
 }
 
 // Yolculuğun ana türü: en çok mesafe kat edilen parça türü.
@@ -532,9 +585,10 @@ function buildRoutines(items, places) {
 // rawPoints: [from - 1 gün, to + 1 gün] aralığını kapsamalı (gece yarısını aşan duraklar için).
 // opt: { from, to, saved: kayıtlı yerler, overrides: {t0: mode}, now: kayıt açıksa şimdiki zaman,
 //        detect: ev/iş otomatik bulunsun mu, hints: {home:{lat,lon}, work:{lat,lon}},
-//        acts: hareket kayıtları (zaman sıralı) }
+//        acts: hareket kayıtları (zaman sıralı),
+//        snapOf: (leg) => {parts} | null — yola oturtma sonucu (sunucudan, telefonda saklı) }
 export function analyze(rawPoints, opt) {
-  const { from, to, saved = [], overrides = {}, now, detect = false, hints, acts = [] } = opt;
+  const { from, to, saved = [], overrides = {}, now, detect = false, hints, acts = [], snapOf } = opt;
   const raw = clean(rawPoints);
   // Ham iz (isteğe bağlı harita katmanı): aralıktaki tüm kayıtlı noktalar, hiç düzeltilmeden.
   const track = [];
@@ -551,6 +605,21 @@ export function analyze(rawPoints, opt) {
   // Kayıt açık ve son nokta eskiyse: hâlâ orada duruyoruz (hareketsizken nokta gelmez).
   if (now && p.length && now - p[p.length - 1].t >= CFG.MIN_STAY) p.push({ ...p[p.length - 1], t: now });
   const all = segment(p, acts);
+
+  // Yola oturtulmuş parçalar: çizgi yol ağını izler, mesafe yol üzerindeki gerçek uzunluktur.
+  // Tür ayrımı bundan ÖNCE yapıldı (eşikler ham izle çalışır) — sonuç gelince tür değişmez, anahtar kaymaz.
+  if (snapOf) for (const it of all) {
+    if (it.type !== 'trip') continue;
+    let hit = false;
+    for (const l of it.legs) {
+      const r = snapOf(l);
+      if (!r) continue;
+      // Sunucunun yol çizgisi gerçek izle birleştirilir: çizgi izden hiçbir yerde birkaç metreden fazla sapmaz.
+      l.snap = fuseSnap(it.pts.slice(l.a, l.b + 1), r.parts, l.mode);
+      l.rawDist = l.dist; l.dist = l.snap.d; l.avg = l.dist / (l.dur / 1000); hit = true;
+    }
+    if (hit) { it.dist = it.legs.reduce((s, l) => s + l.dist, 0); it.avg = it.dist / (it.dur / 1000); }
+  }
 
   const ovKeys = Object.keys(overrides).map(Number);
   all.forEach((it, i) => {

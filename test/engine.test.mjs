@@ -190,5 +190,59 @@ const jogActs = []; for (let t = 0; t <= jog.end; t += 60e3) jogActs.push({ t, k
 const Jg = analyze([...jog.pts, ...stayAt(jog.end + 20e3, 640 * 3.2, 8)], { from: 0, to: 3 * 3600e3, acts: jogActs });
 ok(legsOf(Jg) === 'walk', 'koşu (hareket kaydıyla) yaya sayılır: ' + legsOf(Jg));
 
+// Aktarma: durağa yürü, bekle, otobüs, İN → 90 sn yürü + 1 dk bekle → başka otobüs, in, yürü. Hareket kaydı YOK.
+// Aradaki 1,5 dk'lık yürüyüş "trafikte bekleme" sanılıp otobüse katılMAMALI (kullanıcının 30 Eyl şikâyeti).
+const xfer = drive([[150, 1.35], [120, 0], ...hops(8, 45, 9, 20), [90, 1.3], [60, 0], ...hops(8, 45, 9, 20), [100, 1.35]]);
+const xferEnd = 150 * 1.35 + 8 * 45 * 9 + 90 * 1.3 + 8 * 45 * 9 + 100 * 1.35;
+const Xf = analyze([...xfer.pts, ...stayAt(xfer.end + 20e3, xferEnd, 8)], { from: 0, to: 3 * 3600e3 });
+ok(legsOf(Xf) === 'walk+bus+walk+bus+walk', 'otobüsten inip 1,5 dk yürüyüp başka otobüse binme: ' + legsOf(Xf));
+
+// Trafikte sürünen araba: hızlı → 2 dk dur-kalk (ort. yürüme hızında ama arada 4 m/sn hamleler) → hızlı.
+// Yürüyüş SANILMAMALI (araçtan inme yok).
+const crawl = drive([[180, 12], ...hops(8, 5, 4, 10), [180, 12]]);
+const Cr = analyze([...crawl.pts, ...stayAt(crawl.end + 20e3, 180 * 12 + 8 * 5 * 4 + 180 * 12, 8)], { from: 0, to: 3 * 3600e3 });
+ok(legsOf(Cr) === 'car', 'trafikte sürünen araba yürüyüş sayılmıyor: ' + legsOf(Cr));
+
+// Otobüste seyrek + kaba GPS (30 Eyl kaydındaki gibi): 10 sn arayla ±30 m noktalar, hız ölçümü yok; arada
+// 3 dk trafikte sürünme (~1 m/sn). Hareket algılayıcısı emin değil. "İndi, yürüdü" SANILMAMALI.
+{
+  const pts = [{ t: 0, lat: 40.4, lon: 49.85, acc: 10, spd: 0 }]; let t = 0, x = 0;
+  const add = (dt, dx) => { t += dt; x += dx; pts.push({ t, lat: 40.4, lon: 49.85 + x / 85000, acc: 30, spd: null, crs: null }); };
+  for (let i = 0; i < 20; i++) add(10e3, 90);
+  for (let i = 0; i < 10; i++) add(18e3, 18);
+  for (let i = 0; i < 20; i++) add(10e3, 90);
+  const Sp = analyze([...pts, ...stayAt(t + 20e3, x, 8)], { from: 0, to: 3 * 3600e3 });
+  ok(!/walk/.test(legsOf(Sp)), 'otobüste seyrek/kaba GPS ile sürünme yürüyüş sayılmıyor: ' + legsOf(Sp));
+}
+
+// Yolda bekleme: 200 sn yürü, 1 dk yerinde dur (ışık), 200 sn yürü → tek yolculuk, bir bekleme (~1 dk).
+const pause = drive([[200, 1.35], [60, 0], [200, 1.35]]);
+const Pz = analyze([...pause.pts, ...stayAt(pause.end + 20e3, 400 * 1.35, 8)], { from: 0, to: 3 * 3600e3 });
+const pzTrip = Pz.items.find((i) => i.type === 'trip');
+const pzW = pzTrip ? pzTrip.waits : [];
+ok(pzW.length === 1 && pzW[0].t1 - pzW[0].t0 >= 55e3 && pzW[0].t1 - pzW[0].t0 <= 80e3, 'yolda 1 dk bekleme yakalandı: ' + pzW.map((w) => ((w.t1 - w.t0) / 1000).toFixed(0) + ' sn').join(', '));
+ok(pzTrip && pzTrip.legs.length === 1 && pzTrip.legs[0].waits.length === 1, 'bekleme kendi parçasına bağlı');
+
+// ---- Yola oturtma birleştirmesi (fuseSnap): çizgi gerçek izden sapmamalı ----
+{
+  const { fuseSnap } = await import('../src/snapcore.js');
+  const D = 85000; // m / boylam derecesi (40.4° enlemde yaklaşık)
+  // Doğu-batı düz yol; ortasında yol çizgisi 60 m kuzeye "diken" yapıyor (eşleştirme hatası taklidi).
+  const road = [[40.4, 49.85], [40.4, 49.85 + 200 / D], [40.4 + 60 / 111320, 49.85 + 210 / D], [40.4, 49.85 + 220 / D], [40.4, 49.85 + 500 / D]];
+  // İz: yol boyunca, ±7 m yanal oynama (kaldırım + GPS)
+  const trace = []; for (let x = 0; x <= 500; x += 10) trace.push({ lat: 40.4 + (((x / 10) % 2 ? 7 : -7) / 111320), lon: 49.85 + x / D });
+  const F = fuseSnap(trace, [{ g: 0, c: road }], 'walk');
+  const dev = Math.max(...F.pts.map((q, i) => Math.hypot((q.lat - trace[i].lat) * 111320, (q.lon - trace[i].lon) * D)));
+  // dikenin dibindeki nokta dikenin eteğine oturabilir (o da "yol"); ama çizgi dikenin ucuna (60 m) gitmemeli
+  const offs = F.pts.map((q) => Math.abs(q.lat - 40.4) * 111320), bumped = offs.filter((o) => o > 1).length;
+  ok(dev <= 12.5, 'birleşik çizgi izden en çok 12 m sapıyor: ' + dev.toFixed(1) + ' m');
+  ok(bumped <= 2 && Math.max(...offs) <= 12.5 && F.d < 520, 'zikzak kalktı (' + bumped + ' nokta yoldan >1 m), diken izlenmedi (uzunluk ' + F.d.toFixed(0) + ' m)');
+  // Seyrek noktada köşe: L biçimli yol (doğu 300 m, sonra kuzey 300 m); noktalar 60 m arayla köşeyi keser
+  const L1 = [[40.4, 49.85], [40.4, 49.85 + 300 / D], [40.4 + 300 / 111320, 49.85 + 300 / D]];
+  const sparse = [[0, 0], [60, 0], [120, 0], [180, 0], [240, 0], [290, 25], [300, 85], [300, 145], [300, 205], [300, 265]].map(([x, y]) => ({ lat: 40.4 + y / 111320, lon: 49.85 + x / D }));
+  const G = fuseSnap(sparse, [{ g: 0, c: L1 }], 'bus');
+  ok(G.pts.some((q) => q.via && q.via.some((v) => Math.abs(v[0] - 40.4) < 1e-6 && Math.abs(v[1] - (49.85 + 300 / D)) < 1e-6)), 'seyrek noktada yolun köşesi eklendi (köşe kesilmedi)');
+}
+
 console.log(fail ? `\n${fail} HATA` : '\nTÜMÜ GEÇTİ');
 process.exit(fail ? 1 : 0);

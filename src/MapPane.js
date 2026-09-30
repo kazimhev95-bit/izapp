@@ -18,7 +18,7 @@ export default function MapPane(props) {
     const fit = lastFit.current !== fitKey;
     lastFit.current = fitKey;
     ref.current.injectJavaScript('window.izSet(' + JSON.stringify(mapPayload(props, LINE, fit)) + ');true;');
-  }, [ready, legs, stays, fitKey]);
+  }, [ready, legs, stays, props.marks, fitKey]);
 
   // Canlı konum: yalnız mavi nokta kayar (rota yeniden çizilmez). Konum düğmesine basılınca
   // (centerTick) ya da gösterilecek rota yokken ilk konum gelince harita oraya ortalanır.

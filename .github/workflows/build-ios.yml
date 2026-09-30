@@ -12,6 +12,9 @@ jobs:
   build-ios:
     runs-on: macos-15
     timeout-minutes: 45
+    env:
+      # Yol eşleştirme sunucusunun anahtarı (depoda değil; GitHub gizli değişkeni). JS paketine derlemede gömülür.
+      EXPO_PUBLIC_IZ_KEY: ${{ secrets.IZ_MATCH_KEY }}
     steps:
       - name: Kodu indir
         uses: actions/checkout@v4

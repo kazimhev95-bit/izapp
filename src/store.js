@@ -1,4 +1,5 @@
-// Yerel veri deposu (SQLite) — tüm konum verisi SADECE telefonda durur, hiçbir sunucuya gitmez.
+// Yerel veri deposu (SQLite) — tüm kayıtlar SADECE telefonda saklanır. (Yola oturtma açıkken bitmiş
+// yolculuk noktaları eşleştirme için kendi sunucumuza gider ama orada saklanmaz — bkz. snap.js)
 // Web önizlemesi için eşdeğeri: store.web.js (aynı fonksiyon imzaları).
 import * as SQLite from 'expo-sqlite';
 
@@ -9,12 +10,14 @@ function db() {
   // WAL: arka plan görevi yazarken arayüz okuyabilsin.
   _db.execSync(`
     PRAGMA journal_mode = WAL;
+    PRAGMA synchronous = NORMAL;
     CREATE TABLE IF NOT EXISTS points (t INTEGER PRIMARY KEY, lat REAL NOT NULL, lon REAL NOT NULL, acc REAL, spd REAL);
     CREATE TABLE IF NOT EXISTS places (id INTEGER PRIMARY KEY AUTOINCREMENT, lat REAL NOT NULL, lon REAL NOT NULL, name TEXT, kind TEXT, addr TEXT);
     CREATE TABLE IF NOT EXISTS overrides (t0 INTEGER PRIMARY KEY, mode TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT);
     CREATE TABLE IF NOT EXISTS stat (k TEXT PRIMARY KEY, n INTEGER NOT NULL DEFAULT 0, last INTEGER);
     CREATE TABLE IF NOT EXISTS activity (t INTEGER PRIMARY KEY, k TEXT NOT NULL, c INTEGER NOT NULL DEFAULT 0);
+    CREATE TABLE IF NOT EXISTS snap (k TEXT PRIMARY KEY, ok INTEGER NOT NULL, v TEXT NOT NULL, at INTEGER NOT NULL);
   `);
   // Şema yükseltme: eski kurulumlarda points tablosunda gidiş yönü (crs) sütunu yok — ekle.
   const cols = _db.getAllSync('PRAGMA table_info(points)').map((c) => c.name);
@@ -63,4 +66,24 @@ export function bumpStat(k, n, t) {
 }
 export function getStats() { const o = {}; for (const r of db().getAllSync('SELECT k, n, last FROM stat')) o[r.k] = { n: r.n, last: r.last }; return o; }
 
-export function wipeAll() { db().execSync('DELETE FROM points; DELETE FROM places; DELETE FROM overrides; DELETE FROM kv; DELETE FROM activity; DELETE FROM stat;'); }
+// Yola oturtma sonuçları (sunucudan): parça anahtarı -> {ok, parts} | {ok:false, why}.
+// Analiz dakikada bir çalıştığı için bulunan sonuçlar bellekte de tutulur.
+const snapMem = new Map();
+export function getSnap(k) {
+  if (snapMem.has(k)) return snapMem.get(k);
+  const r = db().getFirstSync('SELECT v FROM snap WHERE k = ?', k);
+  if (!r) return null;
+  const v = JSON.parse(r.v);
+  snapMem.set(k, v);
+  return v;
+}
+export function setSnaps(rows) {
+  if (!rows.length) return;
+  const d = db(), now = Date.now();
+  d.withTransactionSync(() => { for (const [k, v] of rows) d.runSync('INSERT OR REPLACE INTO snap (k, ok, v, at) VALUES (?, ?, ?, ?)', k, v.ok ? 1 : 0, JSON.stringify(v), now); });
+  for (const [k, v] of rows) snapMem.set(k, v);
+}
+export function snapStats() { const r = db().getFirstSync('SELECT SUM(ok) AS ok, COUNT(*) AS n FROM snap'); return { ok: r.ok || 0, fail: (r.n || 0) - (r.ok || 0) }; }
+export function clearSnaps() { db().execSync('DELETE FROM snap;'); snapMem.clear(); }
+
+export function wipeAll() { db().execSync('DELETE FROM points; DELETE FROM places; DELETE FROM overrides; DELETE FROM kv; DELETE FROM activity; DELETE FROM stat; DELETE FROM snap;'); snapMem.clear(); }

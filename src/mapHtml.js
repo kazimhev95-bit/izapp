@@ -1,6 +1,7 @@
 // Harita sayfası (Leaflet + OpenStreetMap, açık yumuşak ton). Telefonda WebView, önizlemede iframe
 // içinde AYNI sayfa çalışır — önizlemede ne görünüyorsa telefonda da o görünür.
-// Veri dışarıdan izSet({legs, stays, fit, pad}) ile, canlı konum izMe({mePos, acc, center, follow}) ile gelir;
+// Veri dışarıdan izSet({legs, stays, marks, fit, pad}) ile, canlı konum izMe({mePos, acc, center, follow}) ile gelir;
+// marks: olay noktaları (araçtan indi/bindi, bekleme) — dokununca saat ve açıklama çıkar;
 // durağa dokunma {stay: key}, haritayı elle kaydırma {drag: 1} olarak döner.
 export const MAP_HTML = `<!doctype html>
 <html><head><meta charset="utf-8">
@@ -47,6 +48,12 @@ export const MAP_HTML = `<!doctype html>
         L.polyline(l.pts,{color:l.color,weight:l.w,lineCap:'round',lineJoin:'round',smoothFactor:0,dashArray:l.dash?'8 8':null}).addTo(g);
         all=all.concat(l.pts);
       });
+      // Olay noktaları: bekleme = gri halka; araç değişimi = koyu halka, içi yeni türün renginde
+      (d.marks||[]).forEach(function(m){
+        var w=m.k==='wait';
+        L.circleMarker([m.lat,m.lon],{radius:w?5:6,color:w?'#5B6873':'#111820',weight:w?2:2.5,fillColor:w?'#FFFFFF':m.c,fillOpacity:1})
+          .bindPopup(m.t,{closeButton:false,autoPan:false}).addTo(g);
+      });
       d.stays.forEach(function(s){
         L.circleMarker([s.lat,s.lon],{radius:9,color:'#0A84A8',weight:3,fillColor:'#FFFFFF',fillOpacity:1}).on('click',function(){send({stay:s.key});}).addTo(g);
         all.push([s.lat,s.lon]);
@@ -59,10 +66,11 @@ export const MAP_HTML = `<!doctype html>
 </script></body></html>`;
 
 // Uygulama verisini harita sayfasının beklediği yalın biçime çevirir.
-export function mapPayload({ legs, stays, pad }, colors, fit) {
+export function mapPayload({ legs, stays, marks, pad }, colors, fit) {
   const L = legs.map((l) => ({ color: colors[l.mode].color, dash: !!l.dash, w: l.mode === 'raw' ? 2 : 5, pts: l.coords.map((c) => [c.latitude, c.longitude]) }));
   return {
     legs: L, stays: stays.map((s) => ({ key: s.key, lat: s.lat, lon: s.lon })),
+    marks: (marks || []).map((m) => ({ k: m.kind, lat: m.lat, lon: m.lon, t: m.label, c: m.mode ? colors[m.mode].color : null })),
     fit, pad: pad || { top: 120, right: 50, bottom: 260, left: 50 },
   };
 }

@@ -19,6 +19,8 @@ import { insertPoints, insertActivity, getKV, setKV, bumpStat, getStats } from '
 
 const TASK = 'iz-konum-kaydi';
 const KEEPALIVE_MS = 5 * 60e3; // yerinde dururken de en az bu sıklıkta bir nokta sakla ("kayıt yaşıyor" izi)
+const MOVING_V = 0.8;          // m/s — bunun üstü "hareket halinde": sık nokta
+const SLOW_DIST = 8;           // m — yavaşken / dururken en az bu kadar yer değiştirmeden nokta saklanmaz
 const toPoint = (l) => ({
   t: Math.round(l.timestamp), lat: l.coords.latitude, lon: l.coords.longitude, acc: l.coords.accuracy,
   spd: l.coords.speed != null && l.coords.speed >= 0 ? l.coords.speed : null,        // m/s (GPS Doppler hızı)
@@ -31,7 +33,11 @@ const errText = (e) => String((e && e.message) || e).slice(0, 200);
 // watch-active, beat-background. Arka planda gerçekten ne çalıştığını bunlar gösterir.
 function note(k, v) { try { setKV(k, v); } catch (e) { /* yoksay */ } }
 const appSt = () => AppState.currentState || 'unknown';
-function count(k, n = 1, st) { try { bumpStat(k + '-' + (st || appSt()), n, Date.now()); } catch (e) { /* yoksay */ } }
+// Sayaçlar önce bellekte toplanır, dakikada bir (ve uygulama durumu değişince) veritabanına yazılır:
+// her konum teslimatında diske yazmak telefonu boşuna uyanık tutar (pil).
+const pend = new Map(); // anahtar -> {n, last}
+function count(k, n = 1, st) { const key = k + '-' + (st || appSt()), o = pend.get(key) || { n: 0, last: 0 }; o.n += n; o.last = Date.now(); pend.set(key, o); }
+function flushStats() { try { for (const [k, o] of pend) bumpStat(k, o.n, o.last); } catch (e) { /* yoksay */ } pend.clear(); }
 
 // Sınama modu (yalnız simülatör testi veritabanına yazar; normal kullanımda null). Sınamada izleyici
 // çalışmaz, izin penceresi açılmaz:
@@ -41,11 +47,11 @@ function count(k, n = 1, st) { try { bumpStat(k + '-' + (st || appSt()), n, Date
 export const testMode = () => { try { return getKV('test_mode', null); } catch (e) { return null; } };
 
 // Hassasiyet profilleri. minDist: bir önceki saklanan noktadan en az bu kadar uzaklaşınca yeni nokta saklanır.
-//  'birebir' GPS'in en iyi doğruluğu, ~3 m'de bir nokta — yol haritaya aynen çizilir
+//  'birebir' GPS'in en iyi doğruluğu; hareket halinde ~2 m'de bir nokta ("metre metre") — yol aynen çizilir
 //  'hassas'  ~12 m'de bir nokta — tür ayrımı için yeterli, daha az veri
 //  'pil'     kaba konum (GPS yerine çoğunlukla Wi-Fi/baz), ~30 m'de bir nokta
 const PROFILES = {
-  birebir: { accuracy: Location.Accuracy.Highest, minDist: 3 },
+  birebir: { accuracy: Location.Accuracy.Highest, minDist: 2 },
   hassas: { accuracy: Location.Accuracy.High, minDist: 12 },
   pil: { accuracy: Location.Accuracy.Balanced, minDist: 30 },
 };
@@ -61,9 +67,11 @@ function keep(locations) {
   for (const l of locations) {
     const p = toPoint(l);
     if (lastKept && p.t <= lastKept.t) continue; // eski ya da diğer kaynaktan zaten gelmiş
-    // Gereken yer değiştirme: profilin mesafesi; konum kabaysa (bina içi, kısık kip) doğruluğun ~%40'ı —
-    // yoksa yerinde dururken GPS'in sağa sola oynaması binlerce gereksiz nokta üretir.
-    const need = Math.max(minDist, (p.acc || 0) * 0.4);
+    // Gereken yer değiştirme HIZA göre: hareket halinde (≥ 0,8 m/s) sık — profilin mesafesi ("metre metre");
+    // yavaşlayınca / dururken seyrek — en az SLOW_DIST ya da doğruluğun %60'ı. Yoksa yerinde dururken GPS'in
+    // sağa sola oynaması binlerce gereksiz nokta (ve pil) harcar. Hız bilinmiyorsa (kaba konum) yavaş sayılır.
+    const moving = p.spd != null && p.spd >= MOVING_V;
+    const need = moving ? Math.max(minDist, (p.acc || 0) * 0.3) : Math.max(SLOW_DIST, minDist, (p.acc || 0) * 0.6);
     if (!lastKept || dist(lastKept, p) >= need || p.t - lastKept.t >= KEEPALIVE_MS) { out.push(p); lastKept = p; }
   }
   if (out.length) insertPoints(out);
@@ -72,14 +80,15 @@ function keep(locations) {
 
 // ---- Akıllı pil tasarrufu ----
 // GPS'i en yüksek doğrulukta sürekli açık tutmak pili hızla bitirir; oysa günün çoğu bir yerde durarak geçer.
-// Kural: STILL_MS boyunca yerinden kıpırdamadıysan konum doğruluğu "kaba"ya (100 m; GPS kapanır, Wi-Fi/baz
+// Kural: 2 dk yerinden kıpırdamadıysan konum doğruluğu "kaba"ya (100 m; GPS kapanır, Wi-Fi/baz
 // kullanılır) indirilir. Yer değiştirdiğin an (WAKE_R metre kayma, hız, ya da hareket işlemcisi
 // "yürüyor/araçta" derse) yeniden en yüksek doğruluğa çıkılır. Kayıt hiç durmaz; yalnız doğruluk değişir.
+// Işıkta / durakta 30-90 sn beklemek GPS'i kısmaz (2 dk'dan kısa).
 const STILL_R = 25, WAKE_R = 60, WAKE_V = 1.5;
-const stillMs = () => (getKV('test_still', 0) || 180) * 1000; // 3 dk (sınamada kısaltılabilir)
+const stillMs = () => (getKV('test_still', 0) || 120) * 1000; // 2 dk (sınamada kısaltılabilir)
 let power = 'high', anchor = null, stillSince = 0, curProfile = getKV('profile', 'birebir');
-// Varsayılan KAPALI: önce eksiksiz kayıt. Ayarlar'dan açılır.
-const smartOn = () => getKV('smart', false) && curProfile !== 'pil';
+// Varsayılan AÇIK (kullanıcı en az pil istedi, 1 Eki 2026). Ayarlar'dan kapatılabilir.
+const smartOn = () => getKV('smart', true) && curProfile !== 'pil';
 
 // Görev seçenekleri. lowPower: kaba doğruluk (durağan mod).
 function taskOptions(lowPower) {
@@ -133,12 +142,14 @@ TaskManager.defineTask(TASK, async ({ data, error, executionInfo }) => {
 // Kalp atışı: JS'in arka planda çalışıp çalışmadığını ölçer (5 sn'de bir). Uygulama durum geçişleri
 // ve açılış sayısı da sayılır — arka planda öldürülüp yeniden açıldıysa 'launch' artar.
 count('launch');
+let beatN = 0;
 setInterval(() => {
   count('beat');
+  if (++beatN % 12 === 0) flushStats(); // dakikada bir diske
   // Hiç kıpırdamayınca iOS konum göndermeyebilir (adapt çağrılmaz): o zaman da durgun sayıp GPS'i kıs.
   if (smartOn() && power === 'high' && lastLocAt && Date.now() - lastLocAt >= stillMs()) setPower('low');
 }, 5000);
-AppState.addEventListener('change', (s) => count('app', 1, s));
+AppState.addEventListener('change', (s) => { count('app', 1, s); flushStats(); });
 
 const taskStarted = () => Location.hasStartedLocationUpdatesAsync(TASK).catch(() => false);
 
@@ -249,6 +260,7 @@ export async function diag(test) {
   await safe('registered', () => TaskManager.isTaskRegisteredAsync(TASK));
   for (const k of ['d_startAt', 'd_startErr', 'd_taskErr', 'd_watchErr', 'd_actErr']) out[k] = getKV(k, null);
   out.power = power;
+  flushStats();
   out.stats = getStats();
   if (test) {
     await safe('test', async () => {

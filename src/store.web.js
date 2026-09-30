@@ -41,4 +41,11 @@ export function getActivity(a, b) { return acts.filter((x) => x.t >= a && x.t < 
 export function bumpStat() {}
 export function getStats() { return {}; }
 
-export function wipeAll() { acts = []; points = []; places = []; overrides = {}; kv = {}; }
+// Yola oturtma önbelleği (bellekte)
+const snaps = new Map();
+export function getSnap(k) { return snaps.get(k) || null; }
+export function setSnaps(rows) { for (const [k, v] of rows) snaps.set(k, v); }
+export function snapStats() { let ok = 0; for (const v of snaps.values()) if (v.ok) ok++; return { ok, fail: snaps.size - ok }; }
+export function clearSnaps() { snaps.clear(); }
+
+export function wipeAll() { acts = []; points = []; places = []; overrides = {}; kv = {}; snaps.clear(); }

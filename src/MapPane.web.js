@@ -28,7 +28,7 @@ export default function MapPane(props) {
     const fit = lastFit.current !== fitKey;
     lastFit.current = fitKey;
     ref.current.contentWindow.postMessage(JSON.stringify(mapPayload(props, LINE, fit)), '*');
-  }, [ready, legs, stays, fitKey]);
+  }, [ready, legs, stays, props.marks, fitKey]);
 
   // Canlı konum noktası (MapPane.js ile aynı mantık)
   const lastTick = useRef(centerTick), centered = useRef(false);
