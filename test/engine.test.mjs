@@ -129,6 +129,33 @@ ok(et && et.type === 'trip' && et.mode === 'walk' && et.dist > 350 && et.dash[0]
   ok(Cz.items.length === 1 && Cz.items[0].type === 'stay' && Cz.totals.trips === 0, 'kaba konum oynaması hareket sayılmıyor: ' + Cz.items.map((i) => i.type).join(','));
 }
 
+// Evde masada duran telefon: konum 1 dakikalığına 375 m öteye sıçrayıp (Wi-Fi konumu) geri geliyor.
+// Gerçek kayıttan (30 Eyl 23:47 "Araba 750 m", 23:53 "Yaya 343 m"). Hayalet yolculuk ÇIKMAMALI.
+{
+  const home = { lat: 40.4, lon: 49.85 }, far = { lat: 40.4 + 375 / 111195, lon: 49.85 };
+  const pts = [];
+  for (let t = 0; t <= 60 * 60e3; t += 30e3) pts.push({ t, ...home, acc: 12, spd: 0, crs: null });
+  // 30. dakikada 3 noktalık sıçrama + 45. dakikada tek noktalık sıçrama
+  pts.push({ t: 30 * 60e3 + 10e3, ...far, acc: 65, spd: null }, { t: 30 * 60e3 + 20e3, lat: far.lat + 0.0003, lon: far.lon, acc: 65, spd: null }, { t: 30 * 60e3 + 25e3, ...far, acc: 48, spd: null });
+  pts.push({ t: 45 * 60e3 + 10e3, lat: 40.4 - 170 / 111195, lon: 49.85, acc: 30, spd: null });
+  pts.sort((x, y) => x.t - y.t);
+  const still = []; for (let t = 0; t <= 60 * 60e3; t += 60e3) still.push({ t, k: 'S', c: 2 });
+  const H1 = analyze(pts, { from: 0, to: 2 * 3600e3, acts: still });
+  ok(H1.totals.trips === 0 && H1.items.length === 1, 'evde GPS sıçraması yolculuk sayılmıyor (hareket kaydıyla): ' + H1.items.map((i) => i.type).join(','));
+  const H2 = analyze(pts, { from: 0, to: 2 * 3600e3 });
+  ok(H2.totals.trips === 0, 'evde GPS sıçraması yolculuk sayılmıyor (hareket kaydı olmadan da): ' + H2.items.map((i) => i.type).join(','));
+  // Gerçek kısa çıkış: markete 300 m yürü, 4 dk kal, geri dön (GPS iyi, hız ölçülüyor) → KALMALI
+  const walkPts = [];
+  for (let t = 0; t <= 20 * 60e3; t += 60e3) walkPts.push({ t, ...home, acc: 10, spd: 0 });
+  let tt = 20 * 60e3;
+  for (let x = 3; x <= 300; x += 3) { tt += 2200; walkPts.push({ t: tt, lat: 40.4, lon: 49.85 + x / 85000, acc: 8, spd: 1.35 }); }
+  for (let k = 0; k < 4; k++) { tt += 60e3; walkPts.push({ t: tt, lat: 40.4, lon: 49.85 + 300 / 85000, acc: 10, spd: 0 }); }
+  for (let x = 297; x >= 0; x -= 3) { tt += 2200; walkPts.push({ t: tt, lat: 40.4, lon: 49.85 + x / 85000, acc: 8, spd: 1.35 }); }
+  for (let k = 1; k <= 20; k++) walkPts.push({ t: tt + k * 60e3, ...home, acc: 10, spd: 0 });
+  const Wk = analyze(walkPts, { from: 0, to: 2 * 3600e3 });
+  ok(Wk.totals.trips === 2 && Wk.totals.modes.walk.dist > 450, 'gerçek kısa çıkış (markete gidip dönme) korunuyor: ' + Wk.totals.trips + ' yolculuk, ' + Wk.totals.modes.walk.dist.toFixed(0) + ' m');
+}
+
 // ---- Dur-kalk senaryoları (hareket kaydı YOK, yalnız hız): doğuya düz yol, 3 m mesafe süzgeci ----
 // plan: [süre sn, hız m/sn] parçaları. Hız 0 iken nokta çıkmaz (telefon duruyor).
 function drive(plan, t0 = 0) {

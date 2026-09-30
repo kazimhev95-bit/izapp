@@ -41,6 +41,7 @@ export const CFG = {
   STOP_MIN: 8e3,          // ms — en kısa duruş
   STOP_AVG: 2.5,          // m/s — seyrek noktalarda: uzun parçanın ortalaması bunun altındaysa duruş sayılır
   BUS_MIN_D: 800,         // m — otobüs sayılacak araç parçasının en kısa mesafesi
+  PHANTOM_MAX: 15 * 60e3, // ms — aynı yere dönen bundan kısa ve kanıtsız yolculuk hayalettir (GPS sıçraması)
   BUS_STOPS_KM: 1.0,      // km başına duruş (otobüs durak durak gider); iki uçta yürüyüş varsa BUS_STOPS_KM2 yeter
   BUS_STOPS_KM2: 0.6,
   BUS_TAIL_WAIT: 90e3,    // ms — araçtan hemen önceki yürüyüş en az bu kadar yerinde beklemeyle bitiyorsa: durakta bekleme
@@ -93,7 +94,18 @@ export function clean(raw) {
     }
     out.push(p);
   }
-  return out;
+  // Tek noktalık sıçrama: p1 hem öncekinden hem sonrakinden çok uzak, ama önceki ile sonraki yan yana →
+  // telefon yerinde dururken Wi-Fi/baz konumu bir anlığına yüzlerce metre öteyi göstermiş. p1 atılır.
+  const res = [];
+  for (let i = 0; i < out.length; i++) {
+    const a = res[res.length - 1], p = out[i], b = out[i + 1];
+    if (a && b && b.t - a.t < 5 * 60e3) {
+      const tol = Math.max(50, 2 * (p.acc || 0)), dab = hav(a, b);
+      if (hav(a, p) > tol && hav(p, b) > tol && dab < 0.3 * Math.min(hav(a, p), hav(p, b))) continue;
+    }
+    res.push(p);
+  }
+  return res;
 }
 
 // İki nokta arasındaki kaymanın "gerçek yer değiştirme" sayılması için eşik. Konum kabaysa (bina içi,
@@ -369,8 +381,35 @@ export function segment(points, acts) {
     cur = s.b;
   }
   if (cur < p.length - 1) pushTrips(cur, p.length - 1);
+  dropPhantoms(items, actAt);
   refineBus(items);
   return items;
+}
+
+// Hayalet yolculuk: telefon masada dururken konum birkaç dakikalığına yüzlerce metre öteye kayıp geri
+// gelir (bina içinde Wi-Fi/baz konumu). Böyle "gidip aynı yere dönen" kısa yolculuk, gerçek harekete dair
+// HİÇ kanıt yoksa silinir ve iki yanındaki durak birleştirilir. Kanıt: hareket algılayıcısının
+// "yürüyor/araçta/bisiklet/koşu" demesi ya da GPS'in iyi doğrulukla (≤ 25 m) en az 3 noktada gerçek hız ölçmesi.
+function dropPhantoms(items, actAt) {
+  const moved = (trip) => {
+    for (let t = trip.t0; t <= trip.t1; t += 10e3) { const k = actAt(t); if (k && k !== 'S') return true; }
+    let good = 0;
+    for (const q of trip.pts) if (q.spd != null && q.spd > 1.0 && (q.acc == null || q.acc <= 25)) good++;
+    return good >= 3;
+  };
+  for (let i = 1; i < items.length - 1; i++) {
+    const a = items[i - 1], t = items[i], b = items[i + 1];
+    if (t.type !== 'trip' || a.type !== 'stay' || b.type !== 'stay') continue;
+    // kısa (≤ 15 dk) ise her zaman; daha uzunsa yalnız noktaları kabaysa (Wi-Fi/baz konumu: ortanca ±30 m üstü)
+    const coarse = quantile(t.pts.map((q) => (q.acc == null ? 99 : q.acc)), 0.5) > 30;
+    if ((t.dur > CFG.PHANTOM_MAX && !coarse) || hav(a, b) > CFG.R_PLACE || moved(t)) continue;
+    // sil: a ile b tek durak olur
+    const w1 = a.t1 - a.t0, w2 = b.t1 - b.t0;
+    a.lat = (a.lat * w1 + b.lat * w2) / (w1 + w2 || 1); a.lon = (a.lon * w1 + b.lon * w2) / (w1 + w2 || 1);
+    a.t1 = b.t1;
+    items.splice(i, 2);
+    i--;
+  }
 }
 
 // Araba mı otobüs mü? Telefonun hareket algılayıcısı ikisine de "araçta" der; hız da benzer. Ayırt eden

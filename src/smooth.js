@@ -117,7 +117,7 @@ export function smoothTrack(pts) {
     }
   }
   const out = new Array(n);
-  for (let i = 0; i < n; i++) { const ll = back(X.xs[i], Y.xs[i]); out[i] = { t: pts[i].t, lat: ll.lat, lon: ll.lon, v: Math.hypot(X.vs[i], Y.vs[i]), acc: pts[i].acc }; }
+  for (let i = 0; i < n; i++) { const ll = back(X.xs[i], Y.xs[i]); out[i] = { t: pts[i].t, lat: ll.lat, lon: ll.lon, v: Math.hypot(X.vs[i], Y.vs[i]), acc: pts[i].acc, spd: pts[i].spd }; }
   return out;
 }
 
