@@ -312,16 +312,17 @@ export function analyze(rawPoints, opt) {
   const p = clean(rawPoints);
   // Ham iz: aralıktaki TÜM kayıtlı noktalar, durak/yolculuk ayrımından bağımsız (kısa hareketler,
   // durak içi dolaşma dahil). Haritada ince çizgi olarak çizilir. GPS'siz/veri-yok parçalarda bölünür;
-  // doğruluğu kötü (>30 m) noktalar çizgiyi bozmasın diye alınmaz.
+  // Bina içinde doğruluk 30–65 m olur; bu noktalar da çizilir (yoksa içeride hiç iz görünmez).
   const track = [];
   let curLine = null, prevPt = null;
   for (const q of p) {
-    if (q.t < from || q.t >= to || q.acc > 30) continue;
+    if (q.t < from || q.t >= to) continue;
     if (!curLine || segKind(prevPt, q) !== 'move') { curLine = []; track.push(curLine); }
     curLine.push(q); prevPt = q;
   }
   const nPoints = p.filter((q) => q.t >= from && q.t < to).length;
   const lastT = p.length ? p[p.length - 1].t : null;
+  const lastPt = p.length ? { ...p[p.length - 1] } : null; // canlı konum gelmezse haritadaki nokta için
   // Kayıt açık ve son nokta eskiyse: hâlâ orada duruyoruz (hareketsizken nokta gelmez).
   if (now && p.length && now - p[p.length - 1].t >= CFG.MIN_STAY) p.push({ ...p[p.length - 1], t: now });
   const all = segment(p);
@@ -366,5 +367,5 @@ export function analyze(rawPoints, opt) {
       }
     }
   }
-  return { items, places, routines: buildRoutines(items, places), days, totals, track: track.filter((l) => l.length > 1), nPoints, lastT };
+  return { items, places, routines: buildRoutines(items, places), days, totals, track: track.filter((l) => l.length > 1), nPoints, lastT, lastPt };
 }

@@ -100,9 +100,12 @@ function HaritaTab({ data, day, setDay, trk, onToggle, onPlace, me }) {
   ], [data]);
   const stays = useMemo(() => data.places.map((p) => ({ key: p.id, lat: p.lat, lon: p.lon, kind: p.kind, place: p })), [data]);
   const t = data.totals;
+  // Mavi nokta: canlı konum; o gelmiyorsa en son KAYDEDİLEN nokta (bugün için).
+  const isToday = day >= dayStart(Date.now());
+  const pos = isToday ? me || (data.lastPt && data.lastPt.t >= day ? data.lastPt : null) : null;
   return (
     <View style={{ flex: 1 }}>
-      <MapPane legs={legs} stays={stays} fitKey={String(day)} me={me} centerTick={centerTick} onStayPress={(m) => onPlace(m.place)} />
+      <MapPane legs={legs} stays={stays} fitKey={String(day)} me={pos} centerTick={centerTick} onStayPress={(m) => onPlace(m.place)} />
       <View style={[s.overlayTop, { top: TOP }]}>
         <DateBar day={day} setDay={setDay} />
         <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' }}>
@@ -113,11 +116,11 @@ function HaritaTab({ data, day, setDay, trk, onToggle, onPlace, me }) {
           <View style={{ flex: 1 }} />
           {/* Anlık hız (GPS'ten). Konum gelmiyorsa nedenini Ayarlar → Tanı gösterir. */}
           <View style={[s.recPill, { marginRight: 8 }]}>
-            <Feather name="activity" size={13} color={me ? C.accent : C.faint} />
-            <Text style={s.recTx}>{me ? (me.spd != null ? Math.round(me.spd * 3.6) + ' km/s' : '— km/s') + ' · ±' + Math.round(me.acc) + ' m' : trk.fg ? 'konum bekleniyor' : 'izin yok'}</Text>
+            <Feather name="activity" size={13} color={pos ? C.accent : C.faint} />
+            <Text style={s.recTx}>{pos ? (pos.spd != null ? Math.round(pos.spd * 3.6) + ' km/s' : '— km/s') + ' · ±' + Math.round(pos.acc || 0) + ' m' : trk.fg ? 'konum bekleniyor' : 'izin yok'}</Text>
           </View>
           {/* Konumuma git: haritayı şu an bulunduğum noktaya ortalar */}
-          <TouchableOpacity style={[s.locBtn, !me && { opacity: 0.5 }]} disabled={!me} onPress={() => setCenterTick(centerTick + 1)}>
+          <TouchableOpacity style={[s.locBtn, !pos && { opacity: 0.5 }]} disabled={!pos} onPress={() => setCenterTick(centerTick + 1)}>
             <Feather name="navigation" size={18} color={C.accent} />
           </TouchableOpacity>
         </View>
@@ -232,7 +235,7 @@ function ModeBars({ days, width }) {
   );
 }
 
-function AnalizTab({ trk, hints, rev, onPlace }) {
+function AnalizTab({ trk, hints, rev, onPlace, onTrip }) {
   const [span, setSpan] = useState(7);
   const [off, setOff] = useState(0); // kaç dönem geriye
   const [open, setOpen] = useState(null); // açık rutin
@@ -240,6 +243,19 @@ function AnalizTab({ trk, hints, rev, onPlace }) {
   const to = addDays(dayStart(Date.now()), 1 - off * span), from = addDays(to, -span);
   const data = useMemo(() => loadRange(from, to, trk.running, hints, true), [from, to, rev, trk.running]);
   const t = data.totals, maxPlace = Math.max(1, ...data.places.map((p) => p.total));
+  // Harita: dönemdeki tüm yolculuklar (türe göre renkli) + gidilen yerler.
+  const legs = useMemo(() => data.items.filter((i) => i.type === 'trip').flatMap(tripLegs), [data]);
+  const stays = useMemo(() => data.places.map((p) => ({ key: p.id, lat: p.lat, lon: p.lon, kind: p.kind, place: p })), [data]);
+  // Yolculuk listesi: nereden → nereye (önceki ve sonraki durak), en yeni üstte.
+  const trips = useMemo(() => {
+    const out = [];
+    data.items.forEach((it, i) => {
+      if (it.type !== 'trip') return;
+      const a = data.items[i - 1], b = data.items[i + 1];
+      out.push({ trip: it, from: a && a.type === 'stay' ? a.place.name : '…', to: b && b.type === 'stay' ? b.place.name : '…' });
+    });
+    return out.reverse();
+  }, [data]);
   return (
     <View style={{ flex: 1, paddingTop: TOP }}>
       <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, gap: 8 }}>
@@ -250,7 +266,23 @@ function AnalizTab({ trk, hints, rev, onPlace }) {
         <Text style={s.tx}>{fmtDate(from)} – {fmtDate(addDays(to, -1))}</Text>
         <TouchableOpacity style={s.iconBtn} disabled={!off} onPress={() => setOff(off - 1)}><Feather name="chevron-right" size={20} color={off ? C.text : C.faint} /></TouchableOpacity>
       </View>
+      <View style={s.anMap}>
+        <MapPane legs={legs} stays={stays} fitKey={'an' + from + '-' + to} pad={{ top: 24, right: 24, bottom: 24, left: 24 }} onStayPress={(m) => onPlace(m.place)} />
+      </View>
       <ScrollView contentContainerStyle={{ padding: 14, paddingBottom: 30 }}>
+        <Card title="YOLCULUKLAR">
+          {trips.length ? trips.slice(0, 40).map(({ trip, from: a, to: b }, i) => (
+            <TouchableOpacity key={i} style={s.tl} onPress={() => onTrip(trip)}>
+              <View style={[s.tlIcon, { borderColor: MODE[trip.mode].color }]}><ModeIcon mode={trip.mode} size={15} /></View>
+              <View style={{ flex: 1 }}>
+                <Text style={s.tx} numberOfLines={1}>{a} → {b}</Text>
+                <Text style={s.dim}>{fmtDay(trip.t0)} · {fmtClock(trip.t0)} – {fmtClock(trip.t1)} · {fmtKm(trip.dist)}</Text>
+              </View>
+              <Text style={s.num}>{fmtDur(trip.dur)}</Text>
+              <Feather name="chevron-right" size={16} color={C.faint} />
+            </TouchableOpacity>
+          )) : <Text style={s.dim}>Bu dönemde yolculuk yok</Text>}
+        </Card>
         <Card title="ÖZET">
           <View style={s.statRow}>
             <Stat label="Toplam yol" value={fmtKm(t.dist)} />
@@ -488,7 +520,8 @@ const TABS = [['harita', 'map', 'Harita'], ['gunluk', 'list', 'Günlük'], ['ana
 export default function App() {
   const [tab, setTab] = useState('harita');
   const [day, setDay] = useState(dayStart(Date.now()));
-  const [rev, setRev] = useState(0); // veri değişti sayacı (yeni nokta, ad/tür düzeltmesi)
+  const [rev, setRev] = useState(0); // düzenleme sayacı (ad/tür düzeltmesi, silme) — uzun dönem analizini yeniler
+  const [tick, setTick] = useState(0); // saat: günlük görünümü 4 sn'de bir yeniler (yeni noktalar)
   const [trk, setTrk] = useState({ fg: false, bg: false, running: false });
   const [profile, setProfileS] = useState(() => store.getKV('profile', 'birebir'));
   const [hints, setHints] = useState(() => store.getKV('hints', null));
@@ -522,14 +555,14 @@ export default function App() {
     return tracker.watch(setMe, trk.running);
   }, [trk.fg, trk.running, tab]);
 
-  // Ekran açıkken 10 sn'de bir ve uygulama öne gelince yenile.
+  // Ekran açıkken 4 sn'de bir ve uygulama öne gelince yenile.
   useEffect(() => {
-    const id = setInterval(bump, 10e3);
+    const id = setInterval(() => setTick((x) => x + 1), 4e3);
     const sub = AppState.addEventListener('change', (a) => { if (a === 'active') { bump(); tracker.status().then(setTrk); } });
     return () => { clearInterval(id); sub.remove(); };
   }, []);
 
-  const data = useMemo(() => loadRange(day, addDays(day, 1), trk.running, hints, false), [day, rev, trk.running, hints]);
+  const data = useMemo(() => loadRange(day, addDays(day, 1), trk.running, hints, false), [day, rev, tick, trk.running, hints]);
 
   // Yeni görülen yerlerin adresini bir kez sor ve kaydet (sonraki analizlerde adıyla gelir).
   useEffect(() => {
@@ -574,7 +607,7 @@ export default function App() {
       <View style={{ flex: 1 }}>
         {tab === 'harita' ? <HaritaTab data={data} day={day} setDay={setDay} trk={trk} onToggle={onToggle} onPlace={setPlace} me={me} /> : null}
         {tab === 'gunluk' ? <GunlukTab data={data} day={day} setDay={setDay} onTrip={setTrip} onPlace={setPlace} /> : null}
-        {tab === 'analiz' ? <AnalizTab trk={trk} hints={hints} rev={rev} onPlace={setPlace} /> : null}
+        {tab === 'analiz' ? <AnalizTab trk={trk} hints={hints} rev={rev} onPlace={setPlace} onTrip={setTrip} /> : null}
         {tab === 'ayarlar' ? <AyarlarTab trk={trk} onToggle={onToggle} profile={profile} setProfile={setProfile} onWipe={onWipe} rev={rev} /> : null}
       </View>
       <View style={[s.nav, { paddingBottom: BOTTOM }]}>
@@ -600,7 +633,7 @@ const s = StyleSheet.create({
   h2: { color: C.text, fontSize: 16, fontWeight: '600' },
   card: { backgroundColor: C.panel, borderWidth: 1, borderColor: C.line, borderRadius: 10, padding: 12, marginBottom: 12 },
   cardHead: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 8 },
-  cardTitle: { color: C.dim, fontSize: 11, fontWeight: '700', letterSpacing: 1 },
+  cardTitle: { color: C.dim, fontSize: 11, fontWeight: '700', letterSpacing: 1, flexShrink: 1 },
   row: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 6 },
   chip: { paddingHorizontal: 12, paddingVertical: 7, borderRadius: 8, borderWidth: 1, borderColor: C.line, backgroundColor: C.panel },
   chipTx: { color: C.dim, fontSize: 13, fontWeight: '600' },
@@ -616,6 +649,7 @@ const s = StyleSheet.create({
   locBtn: { width: 40, height: 40, borderRadius: 10, marginTop: 8, backgroundColor: C.panel, borderWidth: 1, borderColor: C.line, alignItems: 'center', justifyContent: 'center' },
   permBanner: { position: 'absolute', left: 14, right: 14, top: TOP + 110, flexDirection: 'row', gap: 10, alignItems: 'center', backgroundColor: C.bad, borderRadius: 10, padding: 12 },
   permTx: { color: '#fff', fontSize: 13, fontWeight: '600', flex: 1 },
+  anMap: { height: 250, marginHorizontal: 14, marginTop: 10, borderRadius: 10, overflow: 'hidden', borderWidth: 1, borderColor: C.line },
   recTx: { color: C.text, fontSize: 12, fontWeight: '600' },
   overlayBottom: { position: 'absolute', left: 14, right: 14, bottom: 12, backgroundColor: C.panel, borderWidth: 1, borderColor: C.line, borderRadius: 10, padding: 12, gap: 10 },
   statRow: { flexDirection: 'row', gap: 10 },
