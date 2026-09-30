@@ -61,16 +61,15 @@ scenario() { # $1 ad, $2 mod, $3 izin, $4 arka planda kaç sn
 }
 
 # Üretim ayarı, iki izin türünde de arka planda yaşamalı:
-scenario 1-gorev-hepzaman task location-always 150
-scenario 2-gorev-kullanirken task location 100
-# Bilgi: mavi gösterge kapalıyken yalnız "süzgeçsiz" kuralı yetiyor mu?
-scenario 3-gostergesiz-hepzaman tasknoind location-always 100
+scenario 1-gorev-hepzaman task location-always 120
+scenario 2-gorev-kullanirken task location 90
 
 # Üretim kipi (sınama modu yok) + akıllı pil tasarrufu: önce durağan → doğruluk kısılmalı (powerlow),
 # sonra hareket → tam doğruluğa dönmeli (powerhigh). Hepsi arka planda.
 echo; echo "=================== 4-uretim-akilli  (durgun 70 sn -> hareket 60 sn, arka planda)"
-install location-always "('rec','true'),('test_still','30')"
-xcrun simctl location "$UDID" set 40.4093,49.8671
+install location-always "('rec','true'),('test_still','30'),('smart','true')"
+# "Durgun": 2-3 m içinde ağır ağır oynayan konum (gerçek telefonda GPS'in yerinde sayması gibi)
+xcrun simctl location "$UDID" start --speed=0.2 --interval=1 40.40930,49.86710 40.40932,49.86712 40.40930,49.86710 40.40932,49.86712 40.40930,49.86710 40.40932,49.86712 40.40930,49.86710 40.40932,49.86712 40.40930,49.86710 40.40932,49.86712
 xcrun simctl launch "$UDID" "$BID" >/dev/null; sleep 20
 snap "4-uretim-1-onde-durgun"
 xcrun simctl launch "$UDID" com.apple.Preferences >/dev/null; sleep 70

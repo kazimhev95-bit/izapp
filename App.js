@@ -421,7 +421,7 @@ function AyarlarTab({ trk, onToggle, profile, setProfile, onWipe, rev }) {
   const [dg, setDg] = useState({});
   const [testing, setTesting] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [smart, setSmartS] = useState(() => store.getKV('smart', true));
+  const [smart, setSmartS] = useState(() => store.getKV('smart', false));
   useEffect(() => { let on = true; tracker.diag(false).then((d) => on && setDg((o) => ({ ...d, test: o.test }))); return () => { on = false; }; }, [rev, trk]);
   const runTest = async () => { setTesting(true); const d = await tracker.diag(true); setDg(d); setTesting(false); };
   const doExport = async (days) => {

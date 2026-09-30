@@ -78,7 +78,8 @@ function keep(locations) {
 const STILL_R = 25, WAKE_R = 60, WAKE_V = 1.5;
 const stillMs = () => (getKV('test_still', 0) || 180) * 1000; // 3 dk (sınamada kısaltılabilir)
 let power = 'high', anchor = null, stillSince = 0, curProfile = getKV('profile', 'birebir');
-const smartOn = () => getKV('smart', true) && curProfile !== 'pil';
+// Varsayılan KAPALI: önce eksiksiz kayıt. Ayarlar'dan açılır.
+const smartOn = () => getKV('smart', false) && curProfile !== 'pil';
 
 // Görev seçenekleri. lowPower: kaba doğruluk (durağan mod).
 function taskOptions(lowPower) {
@@ -99,7 +100,9 @@ async function setPower(p) {
   power = p; count('power' + p);
   try { if (await taskStarted()) await Location.startLocationUpdatesAsync(TASK, taskOptions(p === 'low')); } catch (e) { note('d_startErr', 'güç: ' + errText(e)); }
 }
+let lastLocAt = 0; // iOS'tan en son konum gelen an (cihaz saati)
 function adapt(locations) {
+  lastLocAt = Date.now();
   if (!smartOn()) { if (power === 'low') setPower('high'); return; }
   for (const l of locations) {
     const p = toPoint(l);
@@ -113,7 +116,11 @@ function adapt(locations) {
 }
 
 TaskManager.defineTask(TASK, async ({ data, error, executionInfo }) => {
-  if (error) { note('d_taskErr', errText(error)); count('taskerr'); return; }
+  if (error) {
+    // kCLError 0 = "konum şu an bilinmiyor": geçicidir, iOS denemeyi sürdürür — hata diye gösterme.
+    if (error.code !== 0) note('d_taskErr', errText(error));
+    count('taskerr'); return;
+  }
   if (!data || !data.locations) return;
   const st = executionInfo && executionInfo.appState;
   try {
@@ -126,7 +133,11 @@ TaskManager.defineTask(TASK, async ({ data, error, executionInfo }) => {
 // Kalp atışı: JS'in arka planda çalışıp çalışmadığını ölçer (5 sn'de bir). Uygulama durum geçişleri
 // ve açılış sayısı da sayılır — arka planda öldürülüp yeniden açıldıysa 'launch' artar.
 count('launch');
-setInterval(() => count('beat'), 5000);
+setInterval(() => {
+  count('beat');
+  // Hiç kıpırdamayınca iOS konum göndermeyebilir (adapt çağrılmaz): o zaman da durgun sayıp GPS'i kıs.
+  if (smartOn() && power === 'high' && lastLocAt && Date.now() - lastLocAt >= stillMs()) setPower('low');
+}, 5000);
 AppState.addEventListener('change', (s) => count('app', 1, s));
 
 const taskStarted = () => Location.hasStartedLocationUpdatesAsync(TASK).catch(() => false);
