@@ -41,6 +41,17 @@ export function getActivity(a, b) { return acts.filter((x) => x.t >= a && x.t < 
 export function bumpStat() {}
 export function getStats() { return {}; }
 
+// Pil ölçümleri + karo önbelleği (bellekte)
+let bat = [];
+export function insertBattery(t, lvl, chg, mode) { bat = bat.filter((x) => x.t !== t); bat.push({ t, lvl, chg, mode }); bat.sort((x, y) => x.t - y.t); }
+export function getBattery(a, b) { return bat.filter((x) => x.t >= a && x.t < b); }
+const tiles = new Map();
+export function getTile(k) { return tiles.get(k) || null; }
+export function hasTiles(keys) { return new Set(keys.filter((k) => tiles.has(k))); }
+export function putTiles(rows) { for (const [k, b] of rows) tiles.set(k, b); }
+export function tileStats() { let bytes = 0; for (const b of tiles.values()) bytes += b.length; return { n: tiles.size, mb: (bytes * 0.75) / 1048576 }; }
+export function clearTiles() { tiles.clear(); }
+
 // Olay günlüğü (bellekte)
 let logs = [];
 export function addLog(k, v) { logs.push({ t: Date.now(), k, v: v == null ? null : typeof v === 'string' ? v : JSON.stringify(v) }); }

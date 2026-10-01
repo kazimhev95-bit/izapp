@@ -3,6 +3,8 @@ import React, { useEffect, useRef, useState } from 'react';
 import { View, StyleSheet } from 'react-native';
 import { LINE } from './theme';
 import { MAP_HTML, mapPayload } from './mapHtml';
+import * as store from './store';
+import { offlineOn } from './offline';
 
 export default function MapPane(props) {
   const { legs, stays, fitKey, onStayPress, me, centerTick, follow } = props;
@@ -15,7 +17,8 @@ export default function MapPane(props) {
     const h = (e) => {
       if (!ref.current || e.source !== ref.current.contentWindow) return;
       let m; try { m = JSON.parse(e.data); } catch (x) { return; }
-      if (m.ready) setReady(true);
+      if (m.ready) { setReady(true); ref.current.contentWindow.postMessage(JSON.stringify({ offline: offlineOn() }), '*'); }
+      if (m.tile) { const b = store.getTile(m.tile); ref.current.contentWindow.postMessage(JSON.stringify({ tileKey: m.tile, b64: b || null }), '*'); }
       if (m.drag && live.current.onUserDrag) live.current.onUserDrag();
       if (m.trip != null && live.current.onTripPress) live.current.onTripPress(m.trip);
       if (m.stay && live.current.onStayPress) { const s = live.current.stays.find((x) => x.key === m.stay); if (s) live.current.onStayPress(s); }

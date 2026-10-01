@@ -5,6 +5,8 @@ import { StyleSheet } from 'react-native';
 import { WebView } from 'react-native-webview';
 import { LINE } from './theme';
 import { MAP_HTML, mapPayload } from './mapHtml';
+import * as store from './store';
+import { offlineOn } from './offline';
 
 export default function MapPane(props) {
   const { legs, stays, fitKey, onStayPress, me, centerTick, follow } = props;
@@ -40,7 +42,9 @@ export default function MapPane(props) {
 
   const onMessage = (e) => {
     let m; try { m = JSON.parse(e.nativeEvent.data); } catch (x) { return; }
-    if (m.ready) setReady(true);
+    if (m.ready) { setReady(true); ref.current && ref.current.injectJavaScript('window.izOffline(' + (offlineOn() ? 'true' : 'false') + ');true;'); }
+    // Çevrimdışı karo: önbellekte varsa base64 gönder, yoksa null (sayfa ağdan yükler)
+    if (m.tile) { const b = store.getTile(m.tile); ref.current && ref.current.injectJavaScript('window.izTile(' + JSON.stringify(m.tile) + ',' + (b ? JSON.stringify(b) : 'null') + ');true;'); }
     if (m.drag && props.onUserDrag) props.onUserDrag();
     if (m.trip != null && props.onTripPress) props.onTripPress(m.trip); // parça bilgisindeki "Ayrıntılar"
     if (m.stay && onStayPress) { const s = stays.find((x) => x.key === m.stay); if (s) onStayPress(s); }

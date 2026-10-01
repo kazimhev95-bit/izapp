@@ -29,6 +29,12 @@
         {
           "motionPermission": "İZ, yürüyüş ile araç yolculuğunu ayırmak ve adım sayını göstermek için hareket verini kullanır. Veriler yalnız bu telefonda kalır."
         }
+      ],
+      [
+        "expo-local-authentication",
+        {
+          "faceIDPermission": "İZ, konum geçmişini korumak için uygulamayı Face ID ile kilitler."
+        }
       ]
     ]
   }

@@ -16,6 +16,7 @@ import { AppState } from 'react-native';
 import * as Location from 'expo-location';
 import * as TaskManager from 'expo-task-manager';
 import { insertPoints, insertActivity, getKV, setKV, bumpStat, getStats, addLog } from './store';
+import { startBattery, stopBattery, startBarometer, stopBarometer, pressure } from './pro';
 
 const TASK = 'iz-konum-kaydi';
 const KEEPALIVE_MS = 5 * 60e3; // yerinde dururken de en az bu sıklıkta bir nokta sakla ("kayıt yaşıyor" izi)
@@ -23,6 +24,7 @@ const MOVING_V = 0.8;          // m/s — bunun üstü "hareket halinde": sık n
 // yavaşken / dururken gereken yer değiştirme profilin 'slow' değeridir (birebir 8 m, maksimum 4 m)
 const toPoint = (l) => ({
   t: Math.round(l.timestamp), lat: l.coords.latitude, lon: l.coords.longitude, acc: l.coords.accuracy,
+  hpa: pressure(), // barometre basıncı (varsa) — metro/tünel ipucu
   spd: l.coords.speed != null && l.coords.speed >= 0 ? l.coords.speed : null,        // m/s (GPS Doppler hızı)
   crs: l.coords.heading != null && l.coords.heading >= 0 ? l.coords.heading : null,  // derece (gidiş yönü)
 });
@@ -193,6 +195,7 @@ export async function start(profile = 'birebir') {
     if (mode === 'taskdf') opt.distanceInterval = 3;
     if (mode === 'tasknoind') opt.showsBackgroundLocationIndicator = false;
     await Location.startLocationUpdatesAsync(TASK, opt);
+    startBattery(() => power); startBarometer();
     note('d_startErr', null); note('d_startAt', Date.now());
     addLog('kayıt-başladı', profile + ' · izin ' + fg.status + '/' + bg.status + (mode ? ' · sınama ' + mode : ''));
   } catch (e) { note('d_startErr', errText(e)); addLog('hata', 'başlatma: ' + errText(e)); }
@@ -202,6 +205,7 @@ export async function start(profile = 'birebir') {
 export async function stop() {
   try {
     if (await taskStarted()) await Location.stopLocationUpdatesAsync(TASK);
+    stopBattery(); stopBarometer();
     addLog('kayıt-durdu', null);
   } catch (e) { note('d_startErr', 'durdurma: ' + errText(e)); }
   return status();

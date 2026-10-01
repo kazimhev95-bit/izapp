@@ -11,6 +11,8 @@ import * as store from './src/store';
 import * as tracker from './src/tracker';
 import * as extras from './src/extras';
 import * as snap from './src/snap';
+import * as pro from './src/pro';
+import * as offline from './src/offline';
 import { analyze, dayStart, addDays, hav, MODES } from './src/engine';
 import { simplifyIdx } from './src/smooth';
 import { C, MODE, fmtClock, fmtClockS, fmtMin, fmtDay, fmtDayShort, fmtDate, fmtDur, fmtDurS, fmtKm, fmtKmh, fmtInt } from './src/theme';
@@ -662,7 +664,54 @@ const PROF_TXT = {
   pil: 'Kaba konum (GPS yerine Wi-Fi/baz). Pil en az bu modda gider; çizgi yaklaşık olur.',
 };
 const STILLS = [[0, 'Hiç'], [60, '1 dk'], [120, '2 dk'], [300, '5 dk']];
+// Pil raporu satırı: "tam doğruluk: 6,1 %/sa (3,2 sa)"
+const MODE_TX = { high: 'tam doğruluk', nav: 'navigasyon', low: 'kısık' };
+function BatteryCard() {
+  const day = dayStart(Date.now());
+  const today = useMemo(() => pro.batteryReport(day, Date.now() + 1), [Math.floor(Date.now() / 60e3)]);
+  const week = useMemo(() => pro.batteryReport(addDays(day, -6), Date.now() + 1), [day]);
+  const pct = (v) => (v == null ? '—' : v.toFixed(1) + ' %/sa');
+  if (!today.n && !week.n) return <Text style={s.dim}>Kayıt sürerken 10 dakikada bir pil seviyesi ölçülür; ilk ölçümlerden sonra burada görünür.</Text>;
+  return (
+    <>
+      <View style={s.statRow}>
+        <Stat label="Bugün düşüş" value={today.hours ? Math.round(today.drop) + ' %' : '—'} />
+        <Stat label="Saatte" value={pct(today.perHour)} />
+        <Stat label="7 gün ort." value={pct(week.perHour)} />
+        <Stat label="Şarjda" value={fmtDur(today.charged * 3600e3)} />
+      </View>
+      <View style={{ marginTop: 8 }}>
+        {Object.entries(week.modes).filter(([, m]) => m.h >= 0.25).map(([k, m]) => (
+          <View key={k} style={s.row}>
+            <Text style={[s.tx, { flex: 1 }]}>{MODE_TX[k] || k}</Text>
+            <Text style={s.dim}>{fmtDur(m.h * 3600e3)}</Text>
+            <Text style={[s.num, { width: 80, textAlign: 'right' }]}>{pct(m.perHour)}</Text>
+          </View>
+        ))}
+      </View>
+      <Text style={[s.dim, { marginTop: 4 }]}>Ölçüm telefonun tüm tüketimini kapsar (ekran, diğer uygulamalar dahil); kipler arası fark GPS’in payını gösterir. Şarjdaki süreler sayılmaz.</Text>
+    </>
+  );
+}
+
 function AyarlarTab({ trk, onToggle, profile, setProfile, onWipe, rev, onSnapReset }) {
+  // Pro: kilit, çevrimdışı harita
+  const [lock, setLockS] = useState(() => pro.lockOn());
+  const [lockOk, setLockOk] = useState(null);
+  useEffect(() => { pro.lockAvailable().then(setLockOk); }, []);
+  const [off, setOffS] = useState(() => offline.offlineOn());
+  const [dl, setDl] = useState(null); // {done, total} indirme ilerlemesi
+  const tiles = useMemo(() => offline.tileStats(), [rev, dl]);
+  const doDownload = async () => {
+    const to = Date.now(), from = addDays(dayStart(to), -29);
+    store.addLog('düğme', 'çevrimdışı harita indir');
+    setDl({ done: 0, total: 0 });
+    const r = await offline.download(store.getPoints(from, to + 1, 30e3), (done, total) => setDl({ done, total }));
+    setDl(null);
+    if (!r) return;
+    if (r.tooMany) Alert.alert('Çok geniş alan', r.total + ' karo gerekiyor (sınır ' + offline.MAX_TILES + '). Son 30 günün bölgesi çok büyük.');
+    else Alert.alert('Çevrimdışı harita', r.got + ' karo indirildi' + (r.fail ? ', ' + r.fail + ' hata' : '') + ' · toplam ' + r.total + ' karo bu bölgede.');
+  };
   const st = useMemo(() => store.pointStats(), [rev, trk]);
   const [snapOn, setSnapOn] = useState(() => snap.enabled());
   const sst = useMemo(() => store.snapStats(), [rev]);
@@ -730,6 +779,32 @@ function AyarlarTab({ trk, onToggle, profile, setProfile, onWipe, rev, onSnapRes
           <Text style={[s.dim, { marginTop: 3 }]}>GPS şu an: {dg.power === 'low' ? 'kısık (duruyorsun)' : dg.power === 'nav' ? 'navigasyon (araçtasın)' : 'tam doğruluk'}. Araçta GPS kendiliğinden navigasyon doğruluğuna çıkar. En doğru çizgi için: Maksimum ya da Birebir + «Hiç» — telefonu cepte değil, üst tarafı açıkta taşımak da GPS’i iyileştirir.</Text>
         </View>
       </Card>
+      <Card title="PRO">
+        {/* Uygulama kilidi: Face ID / Touch ID; öne gelişte sorar */}
+        <View style={s.row}>
+          <Feather name="lock" size={15} color={lock ? C.ok : C.dim} />
+          <Text style={[s.tx, { flex: 1 }]}>Uygulama kilidi (Face ID)</Text>
+          <Chip label={lock ? 'Açık' : 'Kapalı'} active={lock} onPress={async () => {
+            if (!lock && lockOk === false) { Alert.alert('Kilit kurulamadı', 'Telefonda Face ID / Touch ID ya da şifre tanımlı değil.'); return; }
+            if (!lock && !(await pro.unlock())) return; // açarken bir kez doğrula (yanlışlıkla kilitlenmesin)
+            pro.setLock(!lock); setLockS(!lock);
+          }} />
+        </View>
+        <Text style={s.dim}>Açıkken uygulama her öne gelişinde (30 sn’den uzun arkada kaldıysa) Face ID ister. Kayıt arka planda kilitten bağımsız sürer.</Text>
+        {/* Çevrimdışı harita */}
+        <View style={[s.row, { marginTop: 8 }]}>
+          <Feather name="download-cloud" size={15} color={off ? C.ok : C.dim} />
+          <Text style={[s.tx, { flex: 1 }]}>Çevrimdışı harita</Text>
+          <Chip label={off ? 'Açık' : 'Kapalı'} active={off} onPress={() => { offline.setOffline(!off); setOffS(!off); }} />
+        </View>
+        <Text style={s.dim}>Son 30 günde gezdiğin bölgenin harita karoları (yakınlık 11–16) telefona indirilir; internet yokken de harita açılır. Daha yakın bakış yine internetten gelir.</Text>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 8 }}>
+          <TouchableOpacity style={s.btn} disabled={!!dl} onPress={doDownload}><Text style={s.btnTx}>{dl ? (dl.total ? 'İndiriliyor ' + dl.done + '/' + dl.total : 'Hazırlanıyor…') : 'Bölgeyi indir'}</Text></TouchableOpacity>
+          <Text style={[s.dim, { flex: 1 }]}>{tiles.n ? fmtInt(tiles.n) + ' karo · ' + tiles.mb.toFixed(1) + ' MB' : 'indirilmiş karo yok'}</Text>
+          {tiles.n ? <TouchableOpacity style={s.btn} onPress={() => { offline.clearTiles(); store.addLog('düğme', 'çevrimdışı karolar silindi'); setDl(0); }}><Text style={s.btnTx}>Sil</Text></TouchableOpacity> : null}
+        </View>
+      </Card>
+      <Card title="PİL RAPORU"><BatteryCard /></Card>
       <Card title="YOLA OTURTMA">
         {snap.available() ? (
           <>
@@ -996,6 +1071,12 @@ export default function App() {
   const [me, setMe] = useState(null); // canlı konum {lat, lon, acc, spd}
   const [steps, setSteps] = useState(null); // seçili günün adım sayısı
   const [active, setActive] = useState(AppState.currentState !== 'background'); // uygulama ekranda mı
+  // Uygulama kilidi: açılışta ve 30 sn'den uzun arka planda kaldıktan sonra Face ID ister
+  const [locked, setLocked] = useState(() => pro.lockOn());
+  const bgAt = useRef(0);
+  const [unlocking, setUnlocking] = useState(false);
+  const tryUnlock = async () => { if (unlocking) return; setUnlocking(true); const ok = await pro.unlock(); setUnlocking(false); if (ok) setLocked(false); };
+  useEffect(() => { if (locked) tryUnlock(); }, [locked]);
   const tried = useRef(new Set()); // adres sorgusu denenmiş yerler (aynı yeri tekrar tekrar sorma)
   const bump = useCallback(() => setRev((r) => r + 1), []);
 
@@ -1037,6 +1118,8 @@ export default function App() {
   useEffect(() => {
     const sub = AppState.addEventListener('change', (a) => {
       setActive(a !== 'background');
+      if (a === 'background') bgAt.current = Date.now();
+      else if (a === 'active' && pro.lockOn() && bgAt.current && Date.now() - bgAt.current > pro.LOCK_GRACE) setLocked(true);
       store.addLog('uygulama', a === 'active' ? 'öne geldi' : a === 'background' ? 'arka plana gitti' : a);
       if (a === 'active') { bump(); tracker.status().then(setTrk); }
     });
@@ -1139,6 +1222,17 @@ export default function App() {
       </View>
       <TripModal trip={trip} onClose={() => setTrip(null)} onMode={onMode} />
       <PlaceModal place={place} onClose={() => setPlace(null)} onSave={onSavePlace} />
+      {/* Kilit perdesi: açılana kadar ekranı örter (kayıt arkada sürer) */}
+      {locked ? (
+        <View style={s.lockScreen}>
+          <Feather name="lock" size={40} color={C.accent} />
+          <Text style={[s.h1, { marginTop: 16 }]}>İZ kilitli</Text>
+          <Text style={[s.dim, { textAlign: 'center' }]}>Konum geçmişin korunuyor.</Text>
+          <TouchableOpacity style={[s.btn, { marginTop: 20, backgroundColor: C.accent, borderColor: C.accent }]} onPress={tryUnlock}>
+            <Text style={[s.btnTx, { color: C.onAccent }]}>{unlocking ? 'Doğrulanıyor…' : 'Face ID ile aç'}</Text>
+          </TouchableOpacity>
+        </View>
+      ) : null}
     </View>
   );
 }
@@ -1213,5 +1307,6 @@ const s = StyleSheet.create({
   layerSw: { width: 14, height: 4, borderRadius: 2 },
   layerBar: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, paddingHorizontal: 14, paddingVertical: 8 },
   infoBox: { marginTop: 10, padding: 10, borderRadius: 8, backgroundColor: C.panel2 },
+  lockScreen: { ...StyleSheet.absoluteFillObject, backgroundColor: C.bg, alignItems: 'center', justifyContent: 'center', padding: 30 },
   input: { marginTop: 6, borderWidth: 1, borderColor: C.line, borderRadius: 8, paddingHorizontal: 10, paddingVertical: 9, color: C.text, fontSize: 14, backgroundColor: C.bg },
 });

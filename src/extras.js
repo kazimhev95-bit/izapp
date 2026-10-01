@@ -3,7 +3,7 @@
 import { Share } from 'react-native';
 import { Pedometer } from 'expo-sensors';
 import { File, Paths } from 'expo-file-system';
-import { getPoints, getActivity, getStats, getKV, getLogs } from './store';
+import { getPoints, getActivity, getStats, getKV, getLogs, getBattery } from './store';
 
 // [a, b] (ms) aralığında atılan adım. iPhone son 7 günü saklar; izin yoksa / eski tarihse null döner.
 export async function stepsBetween(a, b) {
@@ -43,8 +43,11 @@ export async function exportGpx(trip, name) {
 export async function exportData(from, to) {
   const pts = getPoints(from, to), acts = getActivity(from, to);
   const n = (v) => (v == null ? '' : Math.round(v * 100) / 100);
-  const lines = ['# iz-veri v1  (P: konum noktasi, A: hareket kaydi)', 'P,t,lat,lon,acc,spd,crs'];
-  for (const p of pts) lines.push('P,' + p.t + ',' + p.lat.toFixed(6) + ',' + p.lon.toFixed(6) + ',' + n(p.acc) + ',' + n(p.spd) + ',' + n(p.crs));
+  const lines = ['# iz-veri v2  (P: konum noktasi, A: hareket kaydi, L: olay gunlugu, B: pil)', 'P,t,lat,lon,acc,spd,crs,hpa'];
+  for (const p of pts) lines.push('P,' + p.t + ',' + p.lat.toFixed(6) + ',' + p.lon.toFixed(6) + ',' + n(p.acc) + ',' + n(p.spd) + ',' + n(p.crs) + ',' + n(p.hpa));
+  // Pil ölçümleri: seviye, şarjda mı, GPS kipi
+  lines.push('B,t,lvl,chg,mode');
+  for (const b of getBattery(from, to)) lines.push('B,' + b.t + ',' + b.lvl + ',' + b.chg + ',' + (b.mode || ''));
   lines.push('A,t,k,c');
   for (const a of acts) lines.push('A,' + a.t + ',' + a.k + ',' + a.c);
   // Tanı: sayaçlar (hangi kaynaktan, uygulama hangi durumdayken kaç nokta) ve ayarlar — sorun çözmek için

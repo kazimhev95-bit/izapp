@@ -32,7 +32,23 @@ export const MAP_HTML = `<!doctype html>
   else{
     // canvas: binlerce noktalı rota telefonu yormaz; tolerance: ince çizgiye parmakla dokunmak kolay olsun
     var map=L.map('m',{zoomControl:false,preferCanvas:true,renderer:L.canvas({tolerance:12})}).setView([40.4093,49.8671],12);
-    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,className:'bw',attribution:'© OpenStreetMap'}).addTo(map);
+    // Karo katmanı: önce uygulamadaki çevrimdışı önbelleğe sorar ({tile:'z/x/y'} → izTile ile base64 gelir),
+    // orada yoksa (ya da çevrimdışı kapalıysa) OSM'den yükler. Böylece internet yokken de kayıtlı bölge görünür.
+    var pendingTiles={}, offlineOn=false;
+    var Cached=L.TileLayer.extend({
+      createTile:function(coords,done){
+        var img=document.createElement('img'),key=coords.z+'/'+coords.x+'/'+coords.y,self=this;
+        img.alt='';img.setAttribute('role','presentation');
+        var net=function(){img.onload=function(){done(null,img);};img.onerror=function(){done(new Error('karo'),img);};img.src='https://tile.openstreetmap.org/'+key+'.png';};
+        if(!offlineOn){net();return img;}
+        pendingTiles[key]=function(b64){if(b64){img.onload=function(){done(null,img);};img.src='data:image/png;base64,'+b64;}else net();};
+        send({tile:key});
+        return img;
+      }
+    });
+    new Cached('',{maxZoom:19,className:'bw',attribution:'© OpenStreetMap'}).addTo(map);
+    window.izTile=function(key,b64){var f=pendingTiles[key];if(f){delete pendingTiles[key];f(b64);}};
+    window.izOffline=function(on){offlineOn=!!on;};
     map.attributionControl.setPrefix(false); // Leaflet'in kendi logo/bayrak ön eki gösterilmez
     var g=L.layerGroup().addTo(map), ar=L.layerGroup().addTo(map), legsNow=[];
 
@@ -129,7 +145,7 @@ export const MAP_HTML = `<!doctype html>
       if(d.fit&&all.length){map.invalidateSize();map.fitBounds(all,{paddingTopLeft:[d.pad.left,d.pad.top],paddingBottomRight:[d.pad.right,d.pad.bottom],maxZoom:17});}
       drawArrows();
     };
-    window.addEventListener('message',function(e){try{var d=JSON.parse(e.data);if(d&&d.legs)window.izSet(d);else if(d&&d.cur)window.izCur(d.cur);else if(d&&(d.mePos||d.clear))window.izMe(d);}catch(x){}});
+    window.addEventListener('message',function(e){try{var d=JSON.parse(e.data);if(d&&d.legs)window.izSet(d);else if(d&&d.cur)window.izCur(d.cur);else if(d&&d.tileKey)window.izTile(d.tileKey,d.b64);else if(d&&d.offline!=null)window.izOffline(d.offline);else if(d&&(d.mePos||d.clear))window.izMe(d);}catch(x){}});
     send({ready:1});
   }
 </script></body></html>`;

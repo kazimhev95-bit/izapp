@@ -19,10 +19,13 @@ function db() {
     CREATE TABLE IF NOT EXISTS activity (t INTEGER PRIMARY KEY, k TEXT NOT NULL, c INTEGER NOT NULL DEFAULT 0);
     CREATE TABLE IF NOT EXISTS snap (k TEXT PRIMARY KEY, ok INTEGER NOT NULL, v TEXT NOT NULL, at INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS log (id INTEGER PRIMARY KEY AUTOINCREMENT, t INTEGER NOT NULL, k TEXT NOT NULL, v TEXT);
+    CREATE TABLE IF NOT EXISTS battery (t INTEGER PRIMARY KEY, lvl INTEGER NOT NULL, chg INTEGER NOT NULL DEFAULT 0, mode TEXT);
+    CREATE TABLE IF NOT EXISTS tile (k TEXT PRIMARY KEY, b TEXT NOT NULL, at INTEGER NOT NULL);
   `);
   // Şema yükseltme: eski kurulumlarda points tablosunda gidiş yönü (crs) sütunu yok — ekle.
   const cols = _db.getAllSync('PRAGMA table_info(points)').map((c) => c.name);
   if (!cols.includes('crs')) _db.execSync('ALTER TABLE points ADD COLUMN crs REAL;');
+  if (!cols.includes('hpa')) _db.execSync('ALTER TABLE points ADD COLUMN hpa REAL;'); // barometre basıncı (hPa)
   return _db;
 }
 
@@ -31,14 +34,14 @@ export function insertPoints(arr) {
   if (!arr.length) return;
   const d = db();
   d.withTransactionSync(() => {
-    for (const p of arr) d.runSync('INSERT OR IGNORE INTO points (t, lat, lon, acc, spd, crs) VALUES (?, ?, ?, ?, ?, ?)', p.t, p.lat, p.lon, p.acc ?? null, p.spd ?? null, p.crs ?? null);
+    for (const p of arr) d.runSync('INSERT OR IGNORE INTO points (t, lat, lon, acc, spd, crs, hpa) VALUES (?, ?, ?, ?, ?, ?, ?)', p.t, p.lat, p.lon, p.acc ?? null, p.spd ?? null, p.crs ?? null, p.hpa ?? null);
   });
 }
 // step (ms) verilirse her step'lik dilimden yalnız ilk nokta okunur — uzun dönem analizinde
 // (hafta/ay) yüz binlerce noktayı belleğe almamak için. Harita (tek gün) step'siz, tam okur.
 export function getPoints(a, b, step = 0) {
-  if (!step) return db().getAllSync('SELECT t, lat, lon, acc, spd, crs FROM points WHERE t >= ? AND t < ? ORDER BY t', a, b);
-  return db().getAllSync('SELECT MIN(t) AS t, lat, lon, acc, spd, crs FROM points WHERE t >= ? AND t < ? GROUP BY t / ? ORDER BY t', a, b, step);
+  if (!step) return db().getAllSync('SELECT t, lat, lon, acc, spd, crs, hpa FROM points WHERE t >= ? AND t < ? ORDER BY t', a, b);
+  return db().getAllSync('SELECT MIN(t) AS t, lat, lon, acc, spd, crs, hpa FROM points WHERE t >= ? AND t < ? GROUP BY t / ? ORDER BY t', a, b, step);
 }
 // Aralıktaki verinin "sürümü": nokta sayısı + son zaman. Değişmediyse analizi yeniden yapmaya gerek yok.
 export function rangeVersion(a, b) { const r = db().getFirstSync('SELECT COUNT(*) AS n, MAX(t) AS m FROM points WHERE t >= ? AND t < ?', a, b); return r.n + ':' + (r.m || 0); }
@@ -100,4 +103,15 @@ export function addLog(k, v) {
 export function getLogs(a, b, limit = 100000) { return db().getAllSync('SELECT t, k, v FROM log WHERE t >= ? AND t < ? ORDER BY t DESC, id DESC LIMIT ?', a, b, limit); }
 export function logCount() { return db().getFirstSync('SELECT COUNT(*) AS n FROM log').n; }
 
-export function wipeAll() { db().execSync('DELETE FROM points; DELETE FROM places; DELETE FROM overrides; DELETE FROM kv; DELETE FROM activity; DELETE FROM stat; DELETE FROM snap; DELETE FROM log;'); snapMem.clear(); }
+// Pil ölçümleri (pil raporu): 10 dk'da bir seviye, şarjda mı, GPS kipi
+export function insertBattery(t, lvl, chg, mode) { db().runSync('INSERT OR REPLACE INTO battery (t, lvl, chg, mode) VALUES (?, ?, ?, ?)', t, lvl, chg, mode || null); }
+export function getBattery(a, b) { return db().getAllSync('SELECT t, lvl, chg, mode FROM battery WHERE t >= ? AND t < ? ORDER BY t', a, b); }
+
+// Çevrimdışı harita karoları: anahtar "z/x/y", değer base64 PNG
+export function getTile(k) { const r = db().getFirstSync('SELECT b FROM tile WHERE k = ?', k); return r ? r.b : null; }
+export function hasTiles(keys) { const o = new Set(); for (const k of keys) if (db().getFirstSync('SELECT 1 AS x FROM tile WHERE k = ?', k)) o.add(k); return o; }
+export function putTiles(rows) { const d = db(); d.withTransactionSync(() => { for (const [k, b] of rows) d.runSync('INSERT OR REPLACE INTO tile (k, b, at) VALUES (?, ?, ?)', k, b, Date.now()); }); }
+export function tileStats() { const r = db().getFirstSync('SELECT COUNT(*) AS n, COALESCE(SUM(LENGTH(b)), 0) AS bytes FROM tile'); return { n: r.n, mb: (r.bytes * 0.75) / 1048576 }; }
+export function clearTiles() { db().execSync('DELETE FROM tile;'); }
+
+export function wipeAll() { db().execSync('DELETE FROM points; DELETE FROM places; DELETE FROM overrides; DELETE FROM kv; DELETE FROM activity; DELETE FROM stat; DELETE FROM snap; DELETE FROM log; DELETE FROM battery;'); snapMem.clear(); }

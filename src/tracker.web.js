@@ -8,6 +8,7 @@ export const testMode = () => null;
 export async function startActivity() { return true; }
 export function stopActivity() {}
 export function setSmart() {}
+export const pressure = () => null;
 export const stillSec = () => 120;
 export function setStill() {}
 export async function diag(test) {
