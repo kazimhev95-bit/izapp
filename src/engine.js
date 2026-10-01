@@ -64,6 +64,17 @@ export const CFG = {
   WALK_MAX_V: 3.5,        // m/s — …ve bu aralıkta hiç araç hızı ölçülmemiş olmalı (trafikte dur-kalk ≠ yürüyüş)
   WALK_GAP: 6000,         // ms — hareket kaydı yokken GPS'e ancak iz kaliteliyse güvenilir: noktalar sık…
   WALK_ACC: 20,           // m — …ve doğru olmalı (otobüste GPS seyrek + kaba: sürünmesi yürüyüş gibi görünür)
+  // Fizik kanıtı ("yaya bu hızı tutamaz"): telefonun ÖLÇTÜĞÜ hız (Doppler — konum farkından değil, uydu sinyalinden;
+  // konum sıçramasından etkilenmez) saniyelerce VEH_V'nin üstündeyse bu insan adımı değildir. Yürüyüş ≤ 2,5 m/s,
+  // koşu 3–5 m/s (algılayıcı 'R' der). Ani hızlanma TEK BAŞINA kanıt değil: otobüs (~1–1,5 m/s²) koşmaya başlayan
+  // insandan (~3–4 m/s²) daha YAVAŞ hızlanır; ayırt eden, ulaşılıp TUTULAN hızdır.
+  // 22 km/s yetmez: otobüse koşan genç biri 6,5 m/s'yi 10-25 sn tutabiliyor (kırma sınaması: ortada sahte "araba").
+  VEH_V: 8,               // m/s (29 km/s) — sıradan insanın depar tepesinin üstü
+  VEH_MS: 5000,           // ms — en az bu kadar, ≥ 3 ardışık noktada (aralarında ≤ 5 sn)
+  VEH_ACC: 30,            // m — yalnız bu doğrulukta noktaların hızı sayılır
+  VEH_MIN_D: 150,         // m — fizik kanıtıyla araç sayılacak hareketin en kısa boyu (otobüse koşan birkaç saniyelik depar araç olmasın)
+  BIKE_MAX_V: 10,         // m/s (36 km/s) — algılayıcı "bisiklet" dese de HAREKETLİ sürenin çoğu bunun üstündeyse araçtır
+                          // (1 Eki: otobüste "bisiklet"). Tek yokuş inişi yetmez — bütün sürüş "araba" oluyordu.
 };
 
 export const MODES = ['walk', 'bike', 'bus', 'car', 'metro'];
@@ -276,11 +287,27 @@ function makeTrip(p, a, b, actAt) {
   // 45 sn'lik her hamlesi, öncesindeki uzun bekleyişe katılıp koca yolculuk "yaya" çıkıyordu.)
   const veh = (r) => r && (r.c === 'F' || r.c === 'K');
   const p90 = (r) => { const ws = []; for (let k = r.a; k <= r.b; k++) ws.push(segs[k].ws); return quantile(ws, 0.9); };
+  // Fizik kanıtı (CFG.VEH_*): koşu kesimleri k0..k1 içinde telefonun ölçtüğü hızın en az v olarak kesintisiz
+  // sürdüğü en uzun süre (ms). Yalnız iyi doğruluklu, gerçek noktalar; algılayıcının "koşuyor" dediği anlar sayılmaz.
+  const fastFor = (k0, k1, v) => {
+    let best = 0, st = 0, n = 0, last = null;
+    for (let i = a + k0; i <= a + k1 + 1; i++) {
+      const q = p[i];
+      if (!q.syn && q.spd != null && q.spd >= v && (q.acc == null || q.acc <= CFG.VEH_ACC) && actAt(q.t) !== 'R') {
+        if (n && q.t - last.t <= 5000) n++; else { st = q.t; n = 1; }
+        last = q;
+        if (n >= 3) best = Math.max(best, q.t - st);
+      } else n = 0;
+    }
+    return best;
+  };
   // Gerçek yürüyüş mü (araçtan inip yürümek)? 1) Hareket algılayıcısı emin biçimde "yürüyor/koşuyor" diyorsa
   // evet, "araçta" diyorsa hayır. 2) Algılayıcı emin değilse (cepte, otobüste çoğu zaman öyle — 30 Eyl kaydı)
   // yalnız KALİTELİ GPS'e güvenilir: en az 1 dk, sık (≤ 6 sn arayla) ve doğru (≤ 20 m) noktalar, çoğunda
   // ölçülmüş hız yürüme bandında ve aralıkta hiç araç hızı yok. Otobüste GPS seyrek ve kabadır; trafikte
   // sürünmesi hız olarak yürüyüşe benzer ama bu kalite şartını geçemez.
+  // (Fizik kanıtı buraya BİLEREK konmadı: aktarmada otobüse 7-8 sn koşan yayanın yürüyüşü "yürüyüş değil" sayılıp
+  //  iki otobüs tek otobüs oluyordu — kırma sınaması, 1 Eki.)
   const walked = (r) => {
     let w = 0, au = 0;
     for (let k = r.a; k <= r.b; k++) { const x = segs[k]; if (x.act === 'W' || x.act === 'R') w += x.dt; else if (x.act === 'A') au += x.dt; }
@@ -309,7 +336,47 @@ function makeTrip(p, a, b, actAt) {
     const avg = r.d / (r.dt / 1000);
     return (r.dt >= CFG.SHORT_RUN && (avg >= CFG.WALK_V || p90(r) >= CFG.SOLID_P90)) || (r.d >= CFG.SOLID_D && avg >= CFG.SOLID_V);
   };
-  runs.forEach((r) => { if (veh(r) && !solid(r)) r.c = 'S'; });
+  //    Sağlamlık koşu koşu değil BLOK blok ölçülür: art arda gelen araç/bisiklet koşuları (F/K; aradaki duruşlar
+  //    1. adımda katıldı) tek harekettir. 1 Eki 19:19: otobüs duraktan kalkıp ışıkta 1 dk durdu, algılayıcı arada
+  //    "bisiklet" dedi → hamleler F,K,F,K… diye bölündü, her biri 200 m'nin altında kaldığı için tek tek "sağlam değil"
+  //    sayılıp otobüsün ilk 1,5 dk'sı (8,8 m/s ölçülmüşken) yürüyüşe katılmıştı. Blok sağlamsa: içindeki azınlık sınıf
+  //    (tek başına sağlam değilse) çoğunluğa katılır; "bisiklet" koşusunda 36 km/s saniyelerce ölçülmüşse araçtır.
+  for (let i = 0; i < runs.length;) {
+    if (!veh(runs[i])) { i++; continue; }
+    let j = i;
+    while (j + 1 < runs.length && veh(runs[j + 1])) j++;
+    const blk = runs.slice(i, j + 1);
+    const whole = { a: blk[0].a, b: blk[blk.length - 1].b, d: blk.reduce((s, r) => s + r.d, 0), dt: blk.reduce((s, r) => s + r.dt, 0) };
+    // Çoğunluk: algılayıcı blokta hiç "araçta" demediyse ve hız bisiklet gibiyse (tepe < BIKE_P90) bisiklet —
+    // algılayıcı bisiklette de çoğu zaman sessiz kalıyor (C 20 sn / U 40 sn); yoksa süreye göre.
+    const tF = blk.reduce((s, r) => s + (r.c === 'F' ? r.dt : 0), 0);
+    let auto = false;
+    for (let k = whole.a; k <= whole.b && !auto; k++) auto = segs[k].act === 'A';
+    const bikeBlk = blk.some((r) => r.c === 'K') && !auto && p90(whole) < CFG.BIKE_P90;
+    const maj = bikeBlk ? 'K' : tF * 2 >= whole.dt ? 'F' : 'K';
+    // Fizik kanıtı (yaya bu hızı tutamaz) yalnız ARAÇ çoğunluklu blokta: bisiklet de 29 km/s'ye çıkar; "bisiklet" denen kısa
+    // bloğu bununla kurtarmak, trafikte sürünen otobüsün kalkış hamlesini ayrı bir "bisiklet" parçası yapıyordu (kırma sınaması).
+    const fast = maj === 'F' && whole.d >= CFG.VEH_MIN_D && fastFor(whole.a, whole.b, CFG.VEH_V) >= CFG.VEH_MS;
+    if (!blk.some(solid) && !solid(whole) && !fast) blk.forEach((r) => { r.c = 'S'; });
+    else {
+      // Bisiklet bloğunda algılayıcının sessiz kaldığı hızlı anlar (F) — uzun da olsa — bisiklettir: yoksa "araba" sayılıp
+      // sürüş bisiklet/araba/bisiklet… diye parçalanıyordu. Araç bloğunda "bisiklet" koşusu ancak kendi başına uzun
+      // (≥ 2 dk) ve bisiklet hızındaysa kalır: araçtan durmadan bisiklete geçilmez; otobüste 25-40 sn'lik "bisiklet"
+      // aralığı araba+bisiklet+araba diye bölüyordu (kırma sınaması).
+      blk.forEach((r) => { if (r.c !== maj && (bikeBlk || !(r.dt >= CFG.SHORT_RUN && p90(r) < CFG.BIKE_P90))) r.c = maj; });
+      // İki "bisiklet" koşusu arasındaki tek başına sağlam olmayan hızlı an da bisiklettir (araba → park → bisiklet:
+      // bisiklette algılayıcının 30 sn sustuğu yer "araba" çıkıyordu — kırma sınaması)
+      blk.forEach((r, k) => { if (r.c === 'F' && blk[k - 1] && blk[k + 1] && blk[k - 1].c === 'K' && blk[k + 1].c === 'K' && !solid(r)) r.c = 'K'; });
+      // "Bisiklet" koşusunda HAREKETLİ sürenin yarısından çoğu 36 km/s üstündeyse araçtır (tek yokuş inişi sayılmaz)
+      blk.forEach((r) => {
+        if (r.c !== 'K') return;
+        let mv = 0, fs = 0;
+        for (let k = r.a; k <= r.b; k++) { const s = segs[k]; if (s.ws >= CFG.WALK_V) { mv += s.dt; if (s.ws >= CFG.BIKE_MAX_V) fs += s.dt; } }
+        if (mv && fs * 2 >= mv) r.c = 'F';
+      });
+    }
+    i = j + 1;
+  }
   coalesce('c');
   // 3) yolculuğun başındaki/sonundaki birkaç adımlık yavaşlık (kapıdan araca) → araç
   [[0, 1], [runs.length - 1, runs.length - 2]].forEach(([i, j]) => {

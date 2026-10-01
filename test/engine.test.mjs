@@ -318,5 +318,81 @@ ok(pzTrip && pzTrip.legs.length === 1 && pzTrip.legs[0].waits.length === 1, 'bek
   ok(F.totals.trips === 1 && !F.items.some((i) => i.type === 'gap') && F.totals.dist > 5000, 'tıxac boşluğu yolculuğu bölmüyor: ' + legsOf2(F) + ' ' + Math.round(F.totals.dist) + ' m');
 }
 
+// ---- 1 Eki akşam gerçek kaydı: otobüsün duraktan kalkışı yürüyüş sayılıyordu ----
+// Fizik kanıtı + blok sağlamlığı (engine.js CFG.VEH_*): ölçülen hız saniyelerce ≥ 22 km/s → insan adımı değil.
+{
+  // sensör kayıtları: [başı sn, sonu sn, tür] → 30 sn'de bir kayıt; durum bitince telefon gibi bir 'U' (bilinmiyor,
+  // güven 0) yazılır — yoksa son kayıt 3 dk daha geçerli sayılır (gerçek CSV: "19:16:39 U 0")
+  const actsOf = (spans) => spans.flatMap(([s, e, k]) => { const o = []; for (let t = s; t < e; t += 30) o.push({ t: t * 1000, k, c: 2 }); o.push({ t: e * 1000, k: 'U', c: 0 }); return o; });
+  const P0 = { from: 0, to: 3 * 3600e3 };
+  // A) 1 Eki 19:09–19:31 zamanlamasıyla: 6 dk yürü (algılayıcı W), durakta ~2,5 dk bekle (gerçekte 168 sn; 5 dk'yı
+  //    aşınca ayrı "yer" olur — o başka kural), otobüs kalkar: 6 sn 4 m/s (gerçekte 19:19:02–08, ölçülen 2,3–4,0 m/s,
+  //    ~30 m), ışıkta 55 sn, 18 sn 7–8 m/s (algılayıcı "bisiklet"), yavaşla, 40 sn 12 m/s, yine "bisiklet" 16 sn
+  //    12 m/s, sonra uzun dur-kalk; inip 100 m yürü. Yürüyüş otobüsün kalktığı an bitmeli; "bisiklet" parçası çıkmamalı.
+  //    (Sınır: otobüs ışığa kadar yalnız 2-3 adımlık yol sürünürse — 10 m — o birkaç saniye yürüyüşten ayırt
+  //    edilemez; o zaman biniş noktası ışıktaki duruşa düşer, durağa ~10 m.)
+  const plan = [[360, 1.3], [150, 0], [6, 4], [55, 0], [9, 7], [9, 8], [10, 1.5], [8, 7.5], [17, 0], [40, 12], [16, 12], [25, 11], [26, 0], ...hops(10, 45, 9, 20), [75, 1.3]];
+  const at = (i) => plan.slice(0, i).reduce((s, [d]) => s + d, 0); // plan[i]'nin başladığı saniye
+  const bus1 = drive(plan);
+  const dep = at(2) * 1000; // otobüsün kalktığı an
+  const acts = actsOf([[0, at(1), 'W'], [at(4), at(6), 'C'], [at(10), at(11), 'C']]);
+  const X = analyze([...bus1.pts, ...stayAt(bus1.end + 20e3, plan.reduce((s, [d, v]) => s + d * v, 0), 8)], { ...P0, acts });
+  const tr = X.items.find((i) => i.type === 'trip'), w0 = tr && tr.legs[0];
+  ok(!!w0 && w0.mode === 'walk' && Math.abs(w0.t1 - dep) <= 5000, 'otobüs duraktan kalkınca yürüyüş biter: ' + legsOf(X) + ' · yürüyüş sonu ' + (w0 ? ((w0.t1 - dep) / 1000).toFixed(0) : '?') + ' sn fark');
+  ok(!/bike/.test(legsOf(X)) && tr.legs.length === 3, 'otobüste algılayıcı "bisiklet" dese de bisiklet parçası yok: ' + legsOf(X));
+  // B) otobüse koşan yaya: 2 dk yürü, 6 sn 6,5 m/s depar, 2 dk yürü (algılayıcı yok) → hepsi yaya
+  const run1 = drive([[120, 1.35], [6, 6.5], [120, 1.35]]);
+  const Y = analyze([...run1.pts, ...stayAt(run1.end + 20e3, 240 * 1.35 + 39, 8)], P0);
+  ok(legsOf(Y) === 'walk', 'kısa depar (6 sn 23 km/s) araç sayılmıyor: ' + legsOf(Y));
+  // C) daha uzun depar: 15 sn 6,5 m/s (~100 m) — yine yaya (fizik kanıtı en az 150 m ister)
+  const run2 = drive([[120, 1.35], [15, 6.5], [120, 1.35]]);
+  const Y2 = analyze([...run2.pts, ...stayAt(run2.end + 20e3, 240 * 1.35 + 97, 8)], P0);
+  ok(legsOf(Y2) === 'walk', '15 sn depar araç sayılmıyor: ' + legsOf(Y2));
+  // D) gerçek bisiklet: 8 dk 5,5 m/s, algılayıcı çoğunlukla "bisiklet", arada 30 sn'lik bilinmeyen anlar → tek bisiklet
+  const bk = drive([[30, 1.3], [480, 5.5], [30, 1.3]]);
+  const bkActs = actsOf([[30, 150, 'C'], [180, 300, 'C'], [330, 450, 'C'], [480, 510, 'C']]);
+  const Z = analyze([...bk.pts, ...stayAt(bk.end + 20e3, 60 * 1.3 + 480 * 5.5, 8)], { ...P0, acts: bkActs });
+  ok(/^(walk\+)?bike(\+walk)?$/.test(legsOf(Z)), 'gerçek bisiklet (algılayıcı arada sessiz) tek bisiklet parçası: ' + legsOf(Z));
+  // E) sporcu bisikletli yokuş aşağı 5 sn 40 km/s (algılayıcı "bisiklet") → hâlâ bisiklet
+  const dh = drive([[200, 6], [5, 11], [200, 6]]);
+  const Dh = analyze([...dh.pts, ...stayAt(dh.end + 20e3, 400 * 6 + 55, 8)], { ...P0, acts: actsOf([[0, 405, 'C']]) });
+  ok(legsOf(Dh) === 'bike', 'yokuş aşağı kısa süre 40 km/s giden bisiklet araç sayılmıyor: ' + legsOf(Dh));
+  // F) algılayıcı baştan sona "bisiklet" ama 12 m/s dur-kalk (otobüs/araba) → bisiklet DEĞİL
+  const cb = drive(hops(6, 40, 12, 20));
+  const Cb = analyze([...cb.pts, ...stayAt(cb.end + 20e3, 6 * 40 * 12, 8)], { ...P0, acts: actsOf([[0, 360, 'C']]) });
+  ok(!/bike/.test(legsOf(Cb)), 'algılayıcı "bisiklet" dese de 43 km/s saniyelerce giden araçtır: ' + legsOf(Cb));
+  // G) yürürken konum sıçraması (Doppler hızı yürüme hızında kalır) → yaya kalır
+  const jp = drive([[200, 1.35]]).pts.map((q, i) => (i >= 30 && i < 34 ? { ...q, lon: q.lon + 120 / 85000 } : q));
+  const Jp = analyze([...jp, ...stayAt(200e3 + 20e3, 270, 8)], P0);
+  ok(!/car|bus|bike/.test(legsOf(Jp)), 'yürürken 120 m konum sıçraması araç sayılmıyor: ' + legsOf(Jp));
+  // ---- kırma sınamasının bulduğu gerilemeler (1 Eki, iki bağımsız ajan) ----
+  // H) aktarma: otobüsten in, 80 sn yürü, otobüs gelince 7 sn 6,5 m/s koş (algılayıcı hâlâ "yürüyor"), 20 sn bin → yürüyüş kalmalı
+  const xp = [[150, 1.35], [120, 0], ...hops(8, 45, 9, 20), [80, 1.3], [7, 6.5], [20, 0], ...hops(8, 45, 9, 20), [100, 1.35]];
+  const xat = (i) => xp.slice(0, i).reduce((s, [d]) => s + d, 0), xr = drive(xp);
+  const Xs = analyze([...xr.pts, ...stayAt(xr.end + 20e3, xp.reduce((s, [d, v]) => s + d * v, 0), 8)], { ...P0, acts: actsOf([[0, 150, 'W'], [xat(18), xat(19) + 5, 'W'], [xat(xp.length - 1), xat(xp.length), 'W']]) });
+  ok(legsOf(Xs) === 'walk+bus+walk+bus+walk', 'aktarmada otobüse koşmak iki otobüsü birleştirmiyor: ' + legsOf(Xs));
+  // I) bisiklet 10 dk 5,5 m/s, bir yokuş inişi 23 sn 11 m/s (algılayıcı hep "bisiklet") → hepsi bisiklet
+  const bd = drive([[200, 5.5], [20, 0], [23, 11], [200, 5.5], [20, 0], [150, 5.5]]);
+  const Bd = analyze([...bd.pts, ...stayAt(bd.end + 20e3, 550 * 5.5 + 253, 8)], { ...P0, acts: actsOf([[0, 613, 'C']]) });
+  ok(legsOf(Bd) === 'bike', '23 sn yokuş inişi bütün bisiklet sürüşünü araba yapmıyor: ' + legsOf(Bd));
+  // J) otobüse koşup kaçırmak: 25 sn 6,5 m/s depar, algılayıcı depar boyunca sessiz → yürüyüşün ortasında araç yok
+  const ms = drive([[120, 1.35], [25, 6.5], [100, 1.35]]);
+  const Ms = analyze([...ms.pts, ...stayAt(ms.end + 20e3, 220 * 1.35 + 162, 8)], { ...P0, acts: actsOf([[0, 120, 'W'], [150, 245, 'W']]) });
+  ok(legsOf(Ms) === 'walk', 'otobüse koşup kaçırmak (25 sn depar) araç parçası yaratmıyor: ' + legsOf(Ms));
+  // K) bisikletli, algılayıcı 20 sn "bisiklet" / 40 sn sessiz dönüşümlü (hiç "araçta" değil) → tek bisiklet
+  const fl = drive([[200, 5.5], [25, 0], [200, 5.5], [25, 0], [80, 5.5]]);
+  const flSp = []; for (let s = 0; s < 530; s += 60) flSp.push([s, s + 20, 'C']);
+  const Fl = analyze([...fl.pts, ...stayAt(fl.end + 20e3, 480 * 5.5, 8)], { ...P0, acts: actsOf(flSp) });
+  ok(legsOf(Fl) === 'bike', 'algılayıcısı aralıklı "bisiklet" diyen bisikletli araba/otobüs sayılmıyor: ' + legsOf(Fl));
+  // L) otobüs 8,5 m/s dur-kalk, ortada tek 30 sn kesintisiz "bisiklet" sinyali → bisiklet parçası yok
+  const cs = drive([[150, 1.35], [120, 0], ...hops(12, 45, 8.5, 20), [80, 1.35]]);
+  const Cs = analyze([...cs.pts, ...stayAt(cs.end + 20e3, 230 * 1.35 + 12 * 45 * 8.5, 8)], { ...P0, acts: actsOf([[0, 150, 'W'], [415, 445, 'C']]) });
+  ok(!/bike/.test(legsOf(Cs)) && /bus|car/.test(legsOf(Cs)), 'otobüste 30 sn "bisiklet" sinyali araba+bisiklet+araba diye bölmüyor: ' + legsOf(Cs));
+  // M) araba 7,5 dk → park, 2,5 dk bisikleti indir → bisiklet 7 dk (algılayıcı A / S / C, bisiklette 30 sn sessiz) → car+bike
+  const cb2 = drive([[450, 9], [150, 0], [420, 5]]);
+  const Cb2 = analyze([...cb2.pts, ...stayAt(cb2.end + 20e3, 450 * 9 + 420 * 5, 8)], { ...P0, acts: actsOf([[0, 450, 'A'], [450, 600, 'S'], [600, 750, 'C'], [780, 1020, 'C']]) });
+  ok(legsOf(Cb2) === 'car+bike', 'araba → park → bisiklet: bisiklette algılayıcı sussa da araba parçası çıkmıyor: ' + legsOf(Cb2));
+}
+
 console.log(fail ? `\n${fail} HATA` : '\nTÜMÜ GEÇTİ');
 process.exit(fail ? 1 : 0);
