@@ -1,5 +1,6 @@
-// Yerel veri deposu (SQLite) — tüm kayıtlar SADECE telefonda saklanır. (Yola oturtma açıkken bitmiş
-// yolculuk noktaları eşleştirme için kendi sunucumuza gider ama orada saklanmaz — bkz. snap.js)
+// Yerel veri deposu (SQLite) — kayıtlar önce hep telefona yazılır (internetsiz de kayıt kesilmez). Sunucu aktarımı
+// açıkken satırlar sonra kendi sunucumuza şifreli yedeklenir (sync.js; gönderilmemiş satır sy IS NULL). Yola oturtma
+// için bitmiş yolculuk noktaları ayrıca eşleştirme servisine sorulur, orada saklanmaz (snap.js).
 // Web önizlemesi için eşdeğeri: store.web.js (aynı fonksiyon imzaları).
 import * as SQLite from 'expo-sqlite';
 
@@ -26,8 +27,22 @@ function db() {
   const cols = _db.getAllSync('PRAGMA table_info(points)').map((c) => c.name);
   if (!cols.includes('crs')) _db.execSync('ALTER TABLE points ADD COLUMN crs REAL;');
   if (!cols.includes('hpa')) _db.execSync('ALTER TABLE points ADD COLUMN hpa REAL;'); // barometre basıncı (hPa)
+  // Sunucu aktarımı (sync.js): sy IS NULL = henüz sunucuya gitmedi. Kısmi dizin yalnız bekleyen satırları tutar
+  // (gönderilince dizinden düşer, küçük kalır). Eski kayıtların hepsi ilk açılışta "bekliyor" olur → hepsi aktarılır.
+  for (const x of Object.values(SYNC)) {
+    const c = _db.getAllSync('PRAGMA table_info(' + x.tb + ')').map((r) => r.name);
+    if (!c.includes('sy')) _db.execSync('ALTER TABLE ' + x.tb + ' ADD COLUMN sy INTEGER;');
+    _db.execSync('CREATE INDEX IF NOT EXISTS ' + x.tb + '_sy ON ' + x.tb + ' (' + x.key + ') WHERE sy IS NULL;');
+  }
   return _db;
 }
+// Aktarılan tablolar: kısa ad → tablo, satır anahtarı, sütunlar (sunucuya bu sırayla dizi olarak gider)
+const SYNC = {
+  p: { tb: 'points', key: 't', cols: ['t', 'lat', 'lon', 'acc', 'spd', 'crs', 'hpa'] },
+  a: { tb: 'activity', key: 't', cols: ['t', 'k', 'c'] },
+  b: { tb: 'battery', key: 't', cols: ['t', 'lvl', 'chg', 'mode'] },
+  l: { tb: 'log', key: 'id', cols: ['id', 't', 'k', 'v'] },
+};
 
 // Arka plan görevinden çağrılır: aynı zaman damgası ikinci kez gelirse yok sayılır.
 export function insertPoints(arr) {
@@ -114,8 +129,36 @@ export function putTiles(rows) { const d = db(); d.withTransactionSync(() => { f
 export function tileStats() { const r = db().getFirstSync('SELECT COUNT(*) AS n, COALESCE(SUM(LENGTH(b)), 0) AS bytes FROM tile'); return { n: r.n, mb: (r.bytes * 0.75) / 1048576 }; }
 export function clearTiles() { db().execSync('DELETE FROM tile;'); }
 
+// ---- Sunucu aktarımı (sync.js) ----
+// Henüz gitmemiş en eski n satır, sütun sırasıyla dizi olarak: p [t, lat, lon, acc, spd, crs, hpa], a [t, k, c],
+// b [t, lvl, chg, mode], l [id, t, k, v]. İlk eleman satırın anahtarıdır (markSent onunla işaretler).
+export function unsent(x, n) {
+  const s = SYNC[x];
+  return db().getAllSync('SELECT ' + s.cols.join(', ') + ' FROM ' + s.tb + ' WHERE sy IS NULL ORDER BY ' + s.key + ' LIMIT ?', n).map((r) => s.cols.map((c) => r[c]));
+}
+// Sunucu kabul etti: bu anahtarlı satırlar bir daha gönderilmez (500'lük dilimler — SQL değişken sınırı)
+export function markSent(x, keys) {
+  const s = SYNC[x], d = db();
+  d.withTransactionSync(() => {
+    for (let i = 0; i < keys.length; i += 500) {
+      const part = keys.slice(i, i + 500);
+      d.runSync('UPDATE ' + s.tb + ' SET sy = 1 WHERE ' + s.key + ' IN (' + part.map(() => '?').join(',') + ')', ...part);
+    }
+  });
+}
+// Bekleyen satır sayıları {p, a, b, l} (Ayarlar'da gösterilir)
+export function unsentCount() { const o = {}; for (const x of Object.keys(SYNC)) o[x] = db().getFirstSync('SELECT COUNT(*) AS n FROM ' + SYNC[x].tb + ' WHERE sy IS NULL').n; return o; }
+// Yerler, tür düzeltmeleri ve başlıca ayarlar — değiştikçe sunucuya anlık görüntü olarak gider
+const META_KV = ['profile', 'smart', 'still_s', 'nav_auto', 'lock', 'snap', 'hints'];
+export function syncMeta() {
+  const kv = {};
+  for (const k of META_KV) { const r = db().getFirstSync('SELECT v FROM kv WHERE k = ?', k); if (r) kv[k] = r.v; }
+  return { places: getPlaces(), overrides: getOverrides(), kv };
+}
+
 // Tüm VERİYİ sil: konumlar, yerler, düzeltmeler, hareket, sayaçlar, yola oturtma, günlük, pil, çevrimdışı karolar.
 // AYARLAR kalır (kilit, profil, GPS kısma, katmanlar…) — yalnız veriye bağlı anahtarlar (ev/iş ipucu, durak listesi) silinir.
+// SUNUCUDAKİ yedeğe dokunmaz: o ayrıca «Sunucudaki verimi sil» ile silinir (sync.wipeServer).
 export function wipeAll() {
   db().execSync("DELETE FROM points; DELETE FROM places; DELETE FROM overrides; DELETE FROM activity; DELETE FROM stat; DELETE FROM snap; DELETE FROM log; DELETE FROM battery; DELETE FROM tile; DELETE FROM kv WHERE k IN ('hints', 'busstops', 'applied');");
   snapMem.clear();

@@ -18,16 +18,16 @@
         {
           "isIosBackgroundLocationEnabled": true,
           "locationWhenInUsePermission": "İZ gittiğin yolu haritada göstermek için konumunu kullanır.",
-          "locationAlwaysAndWhenInUsePermission": "İZ, uygulama kapalıyken de gittiğin yolu kaydedebilmek için konumuna her zaman erişmek ister. Veriler yalnız bu telefonda saklanır.",
+          "locationAlwaysAndWhenInUsePermission": "İZ, uygulama kapalıyken de gittiğin yolu kaydedebilmek için konumuna her zaman erişmek ister. Veriler telefonunda ve kendi sunucunda şifreli saklanır.",
           "locationAlwaysPermission": "İZ, uygulama kapalıyken de gittiğin yolu kaydedebilmek için konumuna her zaman erişmek ister.",
-          "motionUsagePermission": "İZ, yürüyüş ile araç yolculuğunu ayırmak ve adım sayını göstermek için hareket verini kullanır. Veriler yalnız bu telefonda kalır."
+          "motionUsagePermission": "İZ, yürüyüş ile araç yolculuğunu ayırmak ve adım sayını göstermek için hareket verini kullanır. Veriler telefonunda ve kendi sunucunda şifreli saklanır."
         }
       ],
       "expo-font",
       [
         "expo-sensors",
         {
-          "motionPermission": "İZ, yürüyüş ile araç yolculuğunu ayırmak ve adım sayını göstermek için hareket verini kullanır. Veriler yalnız bu telefonda kalır."
+          "motionPermission": "İZ, yürüyüş ile araç yolculuğunu ayırmak ve adım sayını göstermek için hareket verini kullanır. Veriler telefonunda ve kendi sunucunda şifreli saklanır."
         }
       ],
       [
@@ -35,7 +35,8 @@
         {
           "faceIDPermission": "İZ, konum geçmişini korumak için uygulamayı Face ID ile kilitler."
         }
-      ]
+      ],
+      "expo-secure-store"
     ]
   }
 }

@@ -11,5 +11,8 @@ module.exports = {
     { name: 'iz-osrm-foot', cwd: '/opt/iz-harita', script: 'osrm/binding/osrm-routed', interpreter: 'none', args: OSRM(3701, 'foot'), max_memory_restart: '700M', restart_delay: 5000 },
     { name: 'iz-osrm-car', cwd: '/opt/iz-harita', script: 'osrm/binding/osrm-routed', interpreter: 'none', args: OSRM(3702, 'car'), max_memory_restart: '700M', restart_delay: 5000 },
     { name: 'iz-harita', cwd: '/opt/iz-harita', script: 'server.js', max_memory_restart: '200M' },
+    // Veri aktarımı (sunucu yedeği): ayrı klasör /opt/iz-sync, yetkisiz 'izsync' kullanıcısıyla çalışır —
+    // diğer uygulamaların dosyalarını okuyamaz, kendi kodunu değiştiremez; Postgres'e parolasız peer bağlanır.
+    { name: 'iz-sync', cwd: '/opt/iz-sync', script: 'sync.js', uid: 'izsync', gid: 'izsync', max_memory_restart: '200M' },
   ],
 };

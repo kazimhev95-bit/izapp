@@ -1,6 +1,7 @@
 // İZ — kişisel konum günlüğü. Telefon gittiğin yolu kaydeder; motor (src/engine.js) bunu
-// duraklara, yolculuklara, ulaşım türlerine ve rutinlere çevirir. Kayıtlar yalnız cihazda durur; yola
-// oturtma için bitmiş yolculuklar kendi sunucumuza sorulur (orada saklanmaz — src/snap.js).
+// duraklara, yolculuklara, ulaşım türlerine ve rutinlere çevirir. Kayıtlar önce cihaza yazılır; aktarım açıksa
+// kendi sunucumuza şifreli yedeklenir (src/sync.js). Yola oturtma için bitmiş yolculuklar ayrıca eşleştirme
+// servisine sorulur (orada saklanmaz — src/snap.js).
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, AppState, Linking, Modal, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
@@ -13,6 +14,7 @@ import * as extras from './src/extras';
 import * as snap from './src/snap';
 import * as pro from './src/pro';
 import * as offline from './src/offline';
+import * as sync from './src/sync';
 import { analyze, dayStart, addDays, hav, MODES } from './src/engine';
 import { simplifyIdx } from './src/smooth';
 import { C, MODE, fmtClock, fmtClockS, fmtMin, fmtDay, fmtDayShort, fmtDate, fmtDur, fmtDurS, fmtKm, fmtKmh, fmtInt } from './src/theme';
@@ -700,6 +702,55 @@ function BatteryCard() {
   );
 }
 
+// Sunucu yedeği: kayıtlar Wi-Fi'de dakikada bir, mobil veride 10 dk'da bir kendi sunucuna şifreli aktarılır
+// (src/sync.js). Kart: aç/kapa, son aktarım, bekleyen, sunucudaki sayılar, «Şimdi aktar», «Sunucudaki verimi sil».
+function SyncCard({ rev }) {
+  const [on, setOn] = useState(() => sync.enabled());
+  const [pend, setPend] = useState(() => sync.pending());
+  const [srv, setSrv] = useState(null); // sunucudaki sayılar {n, first, last} ya da {err}
+  const [busy, setBusy] = useState(false);
+  // Bekleyen sayısı yerelden, sunucudaki sayılar sunucudan (sekme her yenilendiğinde)
+  const refresh = useCallback(async () => {
+    setPend(sync.pending());
+    try { setSrv(await sync.serverInfo()); } catch (e) { setSrv({ err: String((e && e.message) || e) }); }
+  }, []);
+  useEffect(() => { refresh(); }, [rev, refresh]);
+  if (!sync.available()) return <Text style={s.dim}>Bu sürümde sunucu anahtarı yok; veriler yalnız telefonda.</Text>;
+  const st = sync.status, nPend = pend.p + pend.a + pend.b + pend.l;
+  const now = async () => { setBusy(true); store.addLog('düğme', 'şimdi aktar'); await sync.tick(true); await refresh(); setBusy(false); };
+  const wipe = () => Alert.alert('Sunucudaki veri silinsin mi?', 'Bu telefonun sunucudaki TÜM yedeği kalıcı olarak silinir (ayrı bir kopyası yok). Telefondaki kayıtlar kalır. Aktarım açıksa bundan sonraki yeni kayıtlar yine gider.', [
+    { text: 'Vazgeç', style: 'cancel' },
+    { text: 'Sil', style: 'destructive', onPress: async () => {
+      setBusy(true);
+      try { const n = await sync.wipeServer(); Alert.alert('Silindi', fmtInt(n) + ' satır sunucudan silindi.'); } catch (e) { Alert.alert('Silinemedi', String((e && e.message) || e)); }
+      await refresh(); setBusy(false);
+    } },
+  ]);
+  const n = srv && srv.n;
+  return (
+    <>
+      <View style={s.row}>
+        <Feather name="upload-cloud" size={15} color={on ? C.ok : C.dim} />
+        <Text style={[s.tx, { flex: 1 }]}>Verileri sunucuya aktar</Text>
+        <Chip label={on ? 'Açık' : 'Kapalı'} active={on} onPress={() => { sync.setEnabled(!on); setOn(!on); }} />
+      </View>
+      <Text style={s.dim}>Konum noktaları, hareket, pil, olay günlüğü, yer adları ve tür düzeltmeleri kendi sunucuna ({snap.SNAP_HOST}) yedeklenir: Wi‑Fi’de dakikada bir, mobil veride 10 dakikada bir. İnternet yokken telefon kaydetmeyi sürdürür, bağlantı gelince kaldığı yerden gönderir. Süresiz saklanır.</Text>
+      <View style={s.infoBox}>
+        <Text style={s.tx}>Son aktarım: {st.at ? fmtClockS(st.at) + ' (' + fmtDur(Date.now() - st.at) + ' önce' + (st.net ? ', ' + (st.net === 'wifi' ? 'Wi‑Fi' : 'mobil') : '') + ')' : 'henüz yok'}</Text>
+        <Text style={[s.dim, { marginTop: 3 }]}>Bekleyen: {fmtInt(nPend)} satır{pend.p ? ' (' + fmtInt(pend.p) + ' nokta)' : ''}</Text>
+        <Text style={[s.dim, { marginTop: 3 }]}>Sunucuda: {n ? fmtInt(n.p || 0) + ' nokta · ' + fmtInt(n.a || 0) + ' hareket · ' + fmtInt(n.l || 0) + ' günlük · ' + fmtInt(n.b || 0) + ' pil' : srv && srv.err ? 'okunamadı (' + srv.err + ')' : '—'}</Text>
+        {srv && srv.first ? <Text style={[s.dim, { marginTop: 3 }]}>Sunucudaki dönem: {fmtDay(srv.first)} – {fmtDay(srv.last)}</Text> : null}
+        {st.err ? <Text style={[s.dim, { marginTop: 3, color: C.bad }]}>Son hata: {st.err}</Text> : null}
+      </View>
+      <Text style={[s.dim, { marginTop: 6 }]}>Güvenlik: yalnız şifreli bağlantı (HTTPS). Bu telefona özel gizli anahtar iOS Anahtarlık’ta durur, yedekle başka cihaza geçmez; sunucu yalnız özetini bilir. Sunucuda her satır ayrı şifrelenir (AES‑256); yalnız bu telefon kendi verisine yazıp silebilir. Cihaz: {sync.deviceId() || 'henüz kaydolmadı'}.</Text>
+      <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 10 }}>
+        <TouchableOpacity style={s.btn} disabled={busy || !on} onPress={now}><Text style={s.btnTx}>{busy ? 'Bekleyin…' : 'Şimdi aktar'}</Text></TouchableOpacity>
+        <TouchableOpacity style={[s.btn, { borderColor: C.bad }]} disabled={busy} onPress={wipe}><Text style={[s.btnTx, { color: C.bad }]}>Sunucudaki verimi sil</Text></TouchableOpacity>
+      </View>
+    </>
+  );
+}
+
 function AyarlarTab({ trk, onToggle, profile, setProfile, onWipe, rev, onSnapReset }) {
   // Pro: kilit, çevrimdışı harita
   const [lock, setLockS] = useState(() => pro.lockOn());
@@ -830,7 +881,7 @@ function AyarlarTab({ trk, onToggle, profile, setProfile, onWipe, rev, onSnapRes
         <View style={s.row}><Text style={[s.tx, { flex: 1 }]}>Kayıtlı nokta</Text><Text style={s.num}>{fmtInt(st.n)}</Text></View>
         <View style={s.row}><Text style={[s.tx, { flex: 1 }]}>İlk kayıt</Text><Text style={s.num}>{st.first ? fmtDay(st.first) + ' ' + fmtClock(st.first) : '—'}</Text></View>
         <View style={s.row}><Text style={[s.tx, { flex: 1 }]}>Son kayıt</Text><Text style={s.num}>{st.last ? fmtDay(st.last) + ' ' + fmtClock(st.last) : '—'}</Text></View>
-        <Text style={s.dim}>Kayıtlar yalnız bu telefonda saklanır. Yola oturtma açıkken bitmiş yolculukların noktaları eşleştirme için kendi sunucuna gider; orada saklanmaz.</Text>
+        <Text style={s.dim}>Kayıtlar önce bu telefona yazılır; sunucu aktarımı açıksa ayrıca kendi sunucuna şifreli yedeklenir (aşağıda). Yola oturtma için bitmiş yolculukların noktaları eşleştirme servisine sorulur; orada saklanmaz.</Text>
         {/* Dışa aktarma: ham kayıtları dosya olarak paylaş (gerçek veriyle ayar yapmak / yedeklemek için) */}
         <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 10 }}>
           <TouchableOpacity style={s.btn} disabled={busy} onPress={() => doExport(3)}><Text style={s.btnTx}>{busy ? 'Hazırlanıyor…' : 'Dışa aktar · son 3 gün'}</Text></TouchableOpacity>
@@ -838,6 +889,7 @@ function AyarlarTab({ trk, onToggle, profile, setProfile, onWipe, rev, onSnapRes
           <TouchableOpacity style={[s.btn, { borderColor: C.bad }]} onPress={onWipe}><Text style={[s.btnTx, { color: C.bad }]}>Tüm veriyi sil</Text></TouchableOpacity>
         </View>
       </Card>
+      <Card title="SUNUCU YEDEĞİ"><SyncCard rev={rev} /></Card>
       <Card title="OLAY GÜNLÜĞÜ (LOG)" right={<Text style={s.dim}>{fmtInt(store.logCount())} kayıt</Text>}>
         {/* Bastığın düğmeler, ayar değişiklikleri, tür düzeltmeleri, uygulama / kayıt / GPS olayları — saatle.
             Dışa aktarılan dosyaya da girer: sorun olunca sırayla "ne oldu" okunur. */}
@@ -1206,7 +1258,7 @@ export default function App() {
     store.addLog('yer-kaydet', (p.name || '') + ' → ' + (name || '(adsız)') + ' · ' + kind);
     setPlace(null); bump();
   };
-  const onWipe = () => Alert.alert('Tüm veriyi sil', 'Kaydedilmiş bütün konumlar, yerler, düzeltmeler, olay günlüğü, pil ölçümleri ve çevrimdışı karolar silinir; ayarlar (kilit, GPS) kalır. Geri alınamaz.', [
+  const onWipe = () => Alert.alert('Tüm veriyi sil', 'Bu telefondaki bütün konumlar, yerler, düzeltmeler, olay günlüğü, pil ölçümleri ve çevrimdışı karolar silinir; ayarlar (kilit, GPS) kalır. Geri alınamaz.' + (sync.available() ? '\n\nSunucudaki yedek KALIR — onu «Sunucu yedeği» bölümündeki «Sunucudaki verimi sil» siler.' : ''), [
     { text: 'Vazgeç' },
     { text: 'Sil', style: 'destructive', onPress: () => { store.wipeAll(); store.addLog('veri-silindi', 'tüm veri silindi'); store.setKV('rec', trk.running); store.setKV('profile', profile); setHints(null); tried.current.clear(); bump(); } },
   ]);

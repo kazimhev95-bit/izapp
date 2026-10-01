@@ -17,6 +17,7 @@ import * as Location from 'expo-location';
 import * as TaskManager from 'expo-task-manager';
 import { insertPoints, insertActivity, getKV, setKV, bumpStat, getStats, addLog } from './store';
 import { startBattery, stopBattery, startBarometer, stopBarometer, pressure } from './pro';
+import * as sync from './sync';
 
 const TASK = 'iz-konum-kaydi';
 const KEEPALIVE_MS = 5 * 60e3; // yerinde dururken de en az bu sıklıkta bir nokta sakla ("kayıt yaşıyor" izi)
@@ -155,6 +156,8 @@ TaskManager.defineTask(TASK, async ({ data, error, executionInfo }) => {
     count('task', keep(data.locations), st);      // bunlardan saklanan
     adapt(data.locations);
   } catch (e) { note('d_taskErr', 'yazma: ' + errText(e)); }
+  // Sunucu aktarımı: iOS uygulamayı konum için uyandırmışken (süre dolduysa) bekleyenleri gönder
+  sync.tick().catch(() => {});
 });
 
 // Kalp atışı: JS'in arka planda çalışıp çalışmadığını ölçer (5 sn'de bir). Uygulama durum geçişleri
@@ -164,6 +167,8 @@ let beatN = 0;
 setInterval(() => {
   count('beat');
   if (++beatN % 12 === 0) flushStats(); // dakikada bir diske
+  // Sunucu aktarımı: Wi-Fi'de dakikada bir, mobilde 10 dk'da bir (süre dolmadıysa hemen döner) — kayıt kapalıyken de
+  sync.tick().catch(() => {});
   // Hiç kıpırdamayınca iOS konum göndermeyebilir (adapt çağrılmaz): o zaman da durgun sayıp GPS'i kıs.
   if (!recOn) return; // kayıt kapalıyken güç kararı yok
   if (smartOn() && power !== 'low' && lastLocAt && Date.now() - lastLocAt >= stillMs()) setPower('low', 'konum gelmiyor');
