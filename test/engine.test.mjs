@@ -201,6 +201,14 @@ const jogActs = []; for (let t = 0; t <= jog.end; t += 60e3) jogActs.push({ t, k
 const Jg = analyze([...jog.pts, ...stayAt(jog.end + 20e3, 640 * 3.2, 8)], { from: 0, to: 3 * 3600e3, acts: jogActs });
 ok(legsOf(Jg) === 'walk', 'koşu (hareket kaydıyla) yaya sayılır: ' + legsOf(Jg));
 
+// Arabaya binmeden önce 2,5 dk bekleme (1 Eki gerçek kaydı): yürü, bekle, araba 7 km'de yalnız 2 kez duruyor.
+// "Yürüyüş sonunda bekleme" tek başına otobüs dedirtMEMELİ (otobüs durak durak gider).
+{
+  const cw = drive([[120, 1.3], [150, 0], [300, 12], [20, 0], [200, 12], [20, 0], [100, 12], [60, 1.3]]);
+  const Cw = analyze([...cw.pts, ...stayAt(cw.end + 20e3, 120 * 1.3 + 600 * 12 + 60 * 1.3, 8)], { from: 0, to: 3 * 3600e3 });
+  ok(/^walk\+car/.test(legsOf(Cw)) && !/bus/.test(legsOf(Cw)), 'arabaya binmeden beklemek otobüs sayılmıyor: ' + legsOf(Cw));
+}
+
 // Otobüs durağı ipucu (OSM): yürüyüşsüz dur-kalk araç. Duruşlar gerçek durağa denk geliyorsa otobüs,
 // gelmiyorsa (ışık/tıxac) araba; durak listesi yoksa eski kurallar (araba).
 {

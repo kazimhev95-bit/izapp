@@ -3,7 +3,7 @@
 import { Share } from 'react-native';
 import { Pedometer } from 'expo-sensors';
 import { File, Paths } from 'expo-file-system';
-import { getPoints, getActivity, getStats, getKV } from './store';
+import { getPoints, getActivity, getStats, getKV, getLogs } from './store';
 
 // [a, b] (ms) aralığında atılan adım. iPhone son 7 günü saklar; izin yoksa / eski tarihse null döner.
 export async function stepsBetween(a, b) {
@@ -51,7 +51,10 @@ export async function exportData(from, to) {
   lines.push('S,k,n,last');
   const st = getStats();
   for (const k of Object.keys(st)) lines.push('S,' + k + ',' + st[k].n + ',' + (st[k].last || ''));
-  lines.push('K,profile,' + getKV('profile', 'birebir'), 'K,smart,' + getKV('smart', true));
+  lines.push('K,profile,' + getKV('profile', 'birebir'), 'K,smart,' + getKV('smart', true), 'K,still_s,' + getKV('still_s', ''));
+  // Olay günlüğü: düğmeler, ayarlar, uygulama/kayıt/GPS olayları (eskiden yeniye)
+  lines.push('L,t,k,v');
+  for (const r of getLogs(from, to).reverse()) lines.push('L,' + r.t + ',' + r.k + ',' + String(r.v == null ? '' : r.v).replace(/[\r\n]+/g, ' '));
   const d = new Date();
   const f = new File(Paths.cache, 'iz-veri-' + d.getFullYear() + '-' + (d.getMonth() + 1) + '-' + d.getDate() + '.csv');
   f.create({ overwrite: true });

@@ -41,6 +41,12 @@ export function getActivity(a, b) { return acts.filter((x) => x.t >= a && x.t < 
 export function bumpStat() {}
 export function getStats() { return {}; }
 
+// Olay günlüğü (bellekte)
+let logs = [];
+export function addLog(k, v) { logs.push({ t: Date.now(), k, v: v == null ? null : typeof v === 'string' ? v : JSON.stringify(v) }); }
+export function getLogs(a, b, limit = 100000) { return logs.filter((x) => x.t >= a && x.t < b).reverse().slice(0, limit); }
+export function logCount() { return logs.length; }
+
 // Yola oturtma önbelleği (bellekte)
 const snaps = new Map();
 export function getSnap(k) { return snaps.get(k) || null; }
@@ -48,4 +54,4 @@ export function setSnaps(rows) { for (const [k, v] of rows) snaps.set(k, v); }
 export function snapStats() { let ok = 0; for (const v of snaps.values()) if (v.ok) ok++; return { ok, fail: snaps.size - ok }; }
 export function clearSnaps() { snaps.clear(); }
 
-export function wipeAll() { acts = []; points = []; places = []; overrides = {}; kv = {}; snaps.clear(); }
+export function wipeAll() { acts = []; points = []; places = []; overrides = {}; kv = {}; snaps.clear(); logs = []; }

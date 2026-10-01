@@ -151,7 +151,11 @@ function dayData(d, running, hints, rev) {
   const live = running && addDays(d, 1) > Date.now();
   const k = rev + '|' + store.rangeVersion(addDays(d, -1), addDays(d, 2)) + '|' + (live ? Math.floor(Date.now() / 60e3) : '') + '|' + JSON.stringify(hints);
   let v = dayMemo.get(d);
-  if (!v || v.k !== k) { v = { k, r: loadRange(d, addDays(d, 1), running, hints, false) }; dayMemo.set(d, v); }
+  if (!v || v.k !== k) {
+    v = { k, r: loadRange(d, addDays(d, 1), running, hints, false) };
+    dayMemo.delete(d); dayMemo.set(d, v);
+    if (dayMemo.size > 62) dayMemo.delete(dayMemo.keys().next().value); // en çok ~2 aylık gün bellekte
+  }
   return v.r;
 }
 
@@ -159,7 +163,7 @@ function dayData(d, running, hints, rev) {
 // Harita katmanları (turuncu iz / GPS noktaları / doğruluk halkası): seçim telefonda saklanır.
 function useLayers(key, def) {
   const [ly, setLy] = useState(() => ({ ...def, ...(store.getKV(key, null) || {}) }));
-  const toggle = (k) => setLy((o) => { const n = { ...o, [k]: !o[k] }; store.setKV(key, n); return n; });
+  const toggle = (k) => setLy((o) => { const n = { ...o, [k]: !o[k] }; store.setKV(key, n); store.addLog('katman', key + ' · ' + k + ' ' + (n[k] ? 'açık' : 'kapalı')); return n; });
   return [ly, toggle];
 }
 const LAYERS = [['track', 'Turuncu iz', '#FF8A00'], ['dots', 'GPS noktaları', C.dim], ['rings', 'Doğruluk halkası', C.faint]];
@@ -303,7 +307,7 @@ function HaritaTab({ data, day, setDay, trk, onToggle, onPlace, onTrip, me, step
             {/* Konumuma git + takip: haritayı bulunduğum noktaya ortalar ve ben yürüdükçe birlikte kaydırır.
                 Haritayı elle kaydırınca takip bırakılır. */}
             <TouchableOpacity style={[s.locBtn, !pos && { opacity: 0.5 }, follow && { backgroundColor: C.accent, borderColor: C.accent }]} disabled={!pos}
-              onPress={() => { setCenterTick(centerTick + 1); setFollow(true); }}>
+              onPress={() => { setCenterTick(centerTick + 1); setFollow(true); store.addLog('düğme', 'konumuma git + takip'); }}>
               <Feather name="navigation" size={18} color={follow ? C.onAccent : C.accent} />
             </TouchableOpacity>
             {/* Katmanlar: turuncu gerçek iz / GPS noktaları / doğruluk halkası — açıp kapatılır, seçim saklanır */}
@@ -668,9 +672,10 @@ function AyarlarTab({ trk, onToggle, profile, setProfile, onWipe, rev, onSnapRes
   const [busy, setBusy] = useState(false);
   const [still, setStillS] = useState(() => tracker.stillSec());
   useEffect(() => { let on = true; tracker.diag(false).then((d) => on && setDg((o) => ({ ...d, test: o.test }))); return () => { on = false; }; }, [rev, trk]);
-  const runTest = async () => { setTesting(true); const d = await tracker.diag(true); setDg(d); setTesting(false); };
+  const runTest = async () => { setTesting(true); const d = await tracker.diag(true); setDg(d); setTesting(false); store.addLog('konum-testi', d.test || ''); };
   const doExport = async (days) => {
     setBusy(true);
+    store.addLog('dışa-aktar', days ? 'son ' + days + ' gün' : 'tümü');
     try {
       const to = Date.now(), n = await extras.exportData(days ? addDays(dayStart(to), -(days - 1)) : 0, to + 1);
       if (!n) Alert.alert('Dışa aktarılacak veri yok');
@@ -717,12 +722,12 @@ function AyarlarTab({ trk, onToggle, profile, setProfile, onWipe, rev, onSnapRes
           <Text style={[s.tx, { flex: 1 }]}>Durunca GPS’i kıs</Text>
         </View>
         <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
-          {STILLS.map(([sec, label]) => <Chip key={sec} label={label} active={still === sec} onPress={() => { tracker.setStill(sec); setStillS(sec); }} />)}
+          {STILLS.map(([sec, label]) => <Chip key={sec} label={label} active={still === sec} onPress={() => { tracker.setStill(sec); setStillS(sec); store.addLog('ayar', "durunca GPS'i kıs: " + (sec ? sec + ' sn' : 'hiç')); }} />)}
         </View>
         <Text style={[s.dim, { marginTop: 8 }]}>{still ? (STILLS.find((x) => x[0] === still) || [0, still + ' sn'])[1] + ' yerinden kıpırdamazsan GPS kısılır (kayıt sürer, Wi-Fi/baz ~100 m); yürümeye ya da araca binmeye başlayınca anında tam doğruluğa döner. Işıkta/durakta kısa beklemek GPS’i kısmaz.' : 'GPS hep tam açık: en eksiksiz kayıt (duraktan çıkışın ilk metreleri bile), en çok pil.'}</Text>
         <View style={s.infoBox}>
           <Text style={s.tx}>Şu anki düzen: hareket halinde ~{(PROF_M[profile] || PROF_M.birebir)[0]} m’de, yavaşken ~{(PROF_M[profile] || PROF_M.birebir)[1]} m’de bir nokta; {still && profile !== 'pil' ? (STILLS.find((x) => x[0] === still) || [0, still + ' sn'])[1] + ' durunca GPS kısılır' : 'GPS hiç kısılmaz'}.</Text>
-          <Text style={[s.dim, { marginTop: 3 }]}>GPS şu an: {dg.power === 'low' ? 'kısık (duruyorsun)' : 'tam doğruluk'}. En doğru çizgi için: Maksimum ya da Birebir + «Hiç» — telefonu cepte değil, üst tarafı açıkta taşımak da GPS’i iyileştirir.</Text>
+          <Text style={[s.dim, { marginTop: 3 }]}>GPS şu an: {dg.power === 'low' ? 'kısık (duruyorsun)' : dg.power === 'nav' ? 'navigasyon (araçtasın)' : 'tam doğruluk'}. Araçta GPS kendiliğinden navigasyon doğruluğuna çıkar. En doğru çizgi için: Maksimum ya da Birebir + «Hiç» — telefonu cepte değil, üst tarafı açıkta taşımak da GPS’i iyileştirir.</Text>
         </View>
       </Card>
       <Card title="YOLA OTURTMA">
@@ -731,12 +736,12 @@ function AyarlarTab({ trk, onToggle, profile, setProfile, onWipe, rev, onSnapRes
             <View style={s.row}>
               <Feather name="navigation-2" size={15} color={snapOn ? C.ok : C.dim} />
               <Text style={[s.tx, { flex: 1 }]}>Çizgiyi yola oturt</Text>
-              <Chip label={snapOn ? 'Açık' : 'Kapalı'} active={snapOn} onPress={() => { snap.setEnabled(!snapOn); setSnapOn(!snapOn); onSnapReset(); }} />
+              <Chip label={snapOn ? 'Açık' : 'Kapalı'} active={snapOn} onPress={() => { snap.setEnabled(!snapOn); setSnapOn(!snapOn); onSnapReset(); store.addLog('ayar', 'yola oturtma: ' + (!snapOn ? 'açık' : 'kapalı')); }} />
             </View>
             <Text style={s.dim}>Bitmiş yolculukların GPS noktaları kendi sunucuna ({snap.SNAP_HOST}) gider; sunucu onları Azerbaycan yol haritasına oturtup çizgiyi geri yollar, hiçbir şey saklamaz. Çizgi gerçek izinden en çok ~12 m sapar: yol yakınsa yola oturur, değilse iz olduğu gibi kalır. Metro ve tahmini parçalar gönderilmez.</Text>
             <Text style={[s.dim, { marginTop: 6 }]}>Otobüs durağı listesi: {snap.stopsInfo() ? snap.stopsInfo().n + ' durak (OSM, ' + snap.stopsInfo().v + ')' : 'henüz inmedi'} — aracın durduğu yerler durağa denk geliyorsa otobüs sayılır.</Text>
             <Text style={[s.dim, { marginTop: 6 }]}>Oturan parça: {sst.ok} · oturmayan: {sst.fail} · son soru: {snap.status.at ? fmtClock(snap.status.at) : '—'}{snap.status.err ? ' · hata: ' + snap.status.err : ''}</Text>
-            <TouchableOpacity style={[s.btn, { marginTop: 8, alignSelf: 'flex-start' }]} onPress={() => { snap.reset(); onSnapReset(); }}>
+            <TouchableOpacity style={[s.btn, { marginTop: 8, alignSelf: 'flex-start' }]} onPress={() => { snap.reset(); onSnapReset(); store.addLog('düğme', 'yeniden oturt'); }}>
               <Text style={s.btnTx}>Yeniden oturt</Text>
             </TouchableOpacity>
           </>
@@ -753,6 +758,17 @@ function AyarlarTab({ trk, onToggle, profile, setProfile, onWipe, rev, onSnapRes
           <TouchableOpacity style={s.btn} disabled={busy} onPress={() => doExport(0)}><Text style={s.btnTx}>Tümü</Text></TouchableOpacity>
           <TouchableOpacity style={[s.btn, { borderColor: C.bad }]} onPress={onWipe}><Text style={[s.btnTx, { color: C.bad }]}>Tüm veriyi sil</Text></TouchableOpacity>
         </View>
+      </Card>
+      <Card title="OLAY GÜNLÜĞÜ (LOG)" right={<Text style={s.dim}>{fmtInt(store.logCount())} kayıt</Text>}>
+        {/* Bastığın düğmeler, ayar değişiklikleri, tür düzeltmeleri, uygulama / kayıt / GPS olayları — saatle.
+            Dışa aktarılan dosyaya da girer: sorun olunca sırayla "ne oldu" okunur. */}
+        {store.getLogs(0, Date.now() + 1, 25).map((r, i) => (
+          <View key={i} style={{ flexDirection: 'row', gap: 8, paddingVertical: 2 }}>
+            <Text style={[s.dim, { width: 58, ...mono }]}>{fmtClockS(r.t)}</Text>
+            <Text style={[s.dim, { flex: 1 }]} numberOfLines={2}><Text style={{ color: C.text, fontWeight: '600' }}>{r.k}</Text>{r.v ? ' · ' + r.v : ''}</Text>
+          </View>
+        ))}
+        <Text style={[s.dim, { marginTop: 6 }]}>Son 25 olay. Tamamı «Dışa aktar» dosyasına eklenir; 30 günden eskisi kendiliğinden silinir.</Text>
       </Card>
       <Card title="TANI">
         {[
@@ -858,7 +874,7 @@ function TripModal({ trip, onClose, onMode }) {
   }, [trip]);
   if (!trip) return null;
   const title = stName(trip.fromStay) && stName(trip.toStay) ? stName(trip.fromStay) + ' → ' + stName(trip.toStay) : MODE[trip.mode].label + ' · ' + fmtKm(trip.dist);
-  const share = () => extras.exportGpx(trip, title + ' · ' + fmtDay(trip.t0)).catch((e) => Alert.alert('Paylaşılamadı', String((e && e.message) || e)));
+  const share = () => { store.addLog('gpx-paylaş', title + ' · ' + fmtDay(trip.t0)); extras.exportGpx(trip, title + ' · ' + fmtDay(trip.t0)).catch((e) => Alert.alert('Paylaşılamadı', String((e && e.message) || e))); };
   return (
     <Modal visible animationType="slide" onRequestClose={onClose}>
       <View style={{ flex: 1, backgroundColor: C.bg, paddingTop: TOP }}>
@@ -989,6 +1005,7 @@ export default function App() {
     (async () => {
       let st = await tracker.status();
       // Kayıt açık bırakılmışsa HER açılışta yeniden başlat (izin düşmüşse start() izin penceresini açar).
+      store.addLog('açılış', 'sürüm ' + VERSION + ' · profil ' + profile + ' · kayıt ' + (store.getKV('rec', false) ? 'açık' : 'kapalı') + ' · izin ' + (st.bg ? 'her zaman' : st.fg ? 'kullanırken' : 'yok'));
       if (store.getKV('rec', false)) { st = await tracker.start(profile); store.setKV('applied', profile); }
       setTrk(st);
     })();
@@ -1020,6 +1037,7 @@ export default function App() {
   useEffect(() => {
     const sub = AppState.addEventListener('change', (a) => {
       setActive(a !== 'background');
+      store.addLog('uygulama', a === 'active' ? 'öne geldi' : a === 'background' ? 'arka plana gitti' : a);
       if (a === 'active') { bump(); tracker.status().then(setTrk); }
     });
     return () => sub.remove();
@@ -1069,6 +1087,7 @@ export default function App() {
   }, [data]);
 
   const onToggle = async () => {
+    store.addLog('düğme', trk.running ? 'kaydı durdur' : 'kaydı başlat');
     if (trk.running) { store.setKV('rec', false); setTrk(await tracker.stop()); return; }
     const st = await tracker.start(profile);
     setTrk(st);
@@ -1076,32 +1095,43 @@ export default function App() {
     else Alert.alert('Konum izni gerekli', 'Kayıt için iOS Ayarları → Konum bölümünden izin ver.', [{ text: 'Vazgeç' }, { text: 'Ayarları aç', onPress: () => Linking.openSettings() }]);
   };
   const setProfile = async (p) => {
+    store.addLog('ayar', 'GPS profili: ' + profile + ' → ' + p);
     setProfileS(p); store.setKV('profile', p);
     if (trk.running) { setTrk(await tracker.start(p)); store.setKV('applied', p); } // yeni hassasiyetle yeniden başlat
   };
-  const onMode = (t, mode) => { store.setOverride(t.t0, mode); setTrip(null); bump(); };
+  const onMode = (t, mode) => {
+    store.addLog('tür-düzeltme', fmtDay(t.t0) + ' ' + fmtClock(t.t0) + ' yolculuğu · otomatik ' + MODE[t.autoMode || t.mode].label + ' → ' + (mode ? MODE[mode].label : 'otomatik'));
+    store.setOverride(t.t0, mode); setTrip(null); bump();
+  };
   const onSavePlace = (p, name, kind) => {
     const id = p.saved ? p.saved.id : store.addPlace({ lat: p.lat, lon: p.lon, addr: p.addr });
     store.updatePlace(id, name, kind);
+    store.addLog('yer-kaydet', (p.name || '') + ' → ' + (name || '(adsız)') + ' · ' + kind);
     setPlace(null); bump();
   };
   const onWipe = () => Alert.alert('Tüm veriyi sil', 'Kaydedilmiş bütün konumlar, yerler ve düzeltmeler silinir. Geri alınamaz.', [
     { text: 'Vazgeç' },
-    { text: 'Sil', style: 'destructive', onPress: () => { store.wipeAll(); store.setKV('rec', trk.running); store.setKV('profile', profile); setHints(null); tried.current.clear(); bump(); } },
+    { text: 'Sil', style: 'destructive', onPress: () => { store.wipeAll(); store.addLog('veri-silindi', 'tüm veri silindi'); store.setKV('rec', trk.running); store.setKV('profile', profile); setHints(null); tried.current.clear(); bump(); } },
   ]);
+
+  // Gezinme de günlüğe: hangi sekme, hangi gün, hangi yolculuk / yer açıldı
+  const goTab = (k) => { setTab(k); store.addLog('sekme', k); };
+  const goDay = (d) => { setDay(d); store.addLog('gün', fmtDay(d)); };
+  const openTrip = (t) => { setTrip(t); if (t) store.addLog('yolculuk-aç', fmtDay(t.t0) + ' ' + fmtClock(t.t0) + ' · ' + MODE[t.mode].label + ' · ' + fmtKm(t.dist)); };
+  const openPlace = (p) => { setPlace(p); if (p) store.addLog('yer-aç', p.name); };
 
   return (
     <View style={{ flex: 1, backgroundColor: C.bg }}>
       <StatusBar style="dark" />
       <View style={{ flex: 1 }}>
-        {tab === 'harita' ? <HaritaTab data={data} day={day} setDay={setDay} trk={trk} onToggle={onToggle} onPlace={setPlace} onTrip={setTrip} me={me} steps={steps} lastAct={lastAct} /> : null}
-        {tab === 'gunluk' ? <GunlukTab data={data} day={day} setDay={setDay} onTrip={setTrip} onPlace={setPlace} steps={steps} /> : null}
-        {tab === 'analiz' ? <AnalizTab trk={trk} hints={hints} rev={rev} onPlace={setPlace} onTrip={setTrip} onSnap={bump} /> : null}
+        {tab === 'harita' ? <HaritaTab data={data} day={day} setDay={goDay} trk={trk} onToggle={onToggle} onPlace={openPlace} onTrip={openTrip} me={me} steps={steps} lastAct={lastAct} /> : null}
+        {tab === 'gunluk' ? <GunlukTab data={data} day={day} setDay={goDay} onTrip={openTrip} onPlace={openPlace} steps={steps} /> : null}
+        {tab === 'analiz' ? <AnalizTab trk={trk} hints={hints} rev={rev} onPlace={openPlace} onTrip={openTrip} onSnap={bump} /> : null}
         {tab === 'ayarlar' ? <AyarlarTab trk={trk} onToggle={onToggle} profile={profile} setProfile={setProfile} onWipe={onWipe} rev={rev + tick} onSnapReset={bump} /> : null}
       </View>
       <View style={[s.nav, { paddingBottom: BOTTOM }]}>
         {TABS.map(([k, icon, label]) => (
-          <TouchableOpacity key={k} style={s.navBtn} onPress={() => setTab(k)}>
+          <TouchableOpacity key={k} style={s.navBtn} onPress={() => goTab(k)}>
             <Feather name={icon} size={20} color={tab === k ? C.accent : C.dim} />
             <Text style={[s.navTx, tab === k && { color: C.accent }]}>{label}</Text>
           </TouchableOpacity>

@@ -48,9 +48,11 @@ export async function fill(items) {
       got += rows.length;
     }
     status.at = Date.now(); status.err = null;
+    store.addLog('sunucu', 'yola oturtma: ' + todo.length + ' parça soruldu, ' + got + ' cevap');
   } catch (e) {
     status.err = e && e.name === 'AbortError' ? 'zaman aşımı' : String((e && e.message) || e);
     nextTry = Date.now() + RETRY_MS;
+    store.addLog('sunucu', 'yola oturtma HATA: ' + status.err);
   } finally { busy = false; }
   return got > 0;
 }
@@ -90,6 +92,7 @@ export async function fetchStops() {
     const j = await res.json();
     if (!j || !Array.isArray(j.pts) || !j.pts.length) return false;
     store.setKV('busstops', { v: j.v, n: j.n, pts: j.pts, at: Date.now() });
+    store.addLog('sunucu', 'otobüs durak listesi indi: ' + j.n + ' durak');
     stopIdx = undefined;
     return true;
   } catch (e) { return false; }

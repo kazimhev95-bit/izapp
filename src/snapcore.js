@@ -53,11 +53,65 @@ const CORR = { walk: [28, 35, 4, 12, 1.2], bike: [28, 35, 4, 12, 1.2], car: [25,
 const VIA = { walk: [1.3, 8], bike: [1.3, 8], car: [1.5, 20], bus: [1.5, 20] };
 const M_DEG = 111320; // m / enlem derecesi
 
+// Araçta tam yol: noktaların çoğu (≥ %70) sunucunun yol çizgisinin geniş koridorundaysa çizgi baştan sona
+// yolun kendisidir — noktalar yol boyunca SIRAYLA (geri gitmeden) izdüşürülür, aralarına yolun köşeleri girer;
+// GPS boşlukları da yoldan dolar. Araç yoldan çıkamaz: kaba/seyrek GPS'te (araç içinde cepteki telefon, ±40-166 m,
+// 50 sn boşluk — 1 Eki) yol, noktaları düz çizgiyle birleştirmekten çok daha doğrudur. Uymuyorsa null.
+function fullRoad(pts, parts, X, back) {
+  const c = [];
+  for (const p of parts) for (const q of p.c) { const l = c[c.length - 1]; if (!l || l[0] !== q[0] || l[1] !== q[1]) c.push(q); }
+  if (c.length < 2) return null;
+  const xy = c.map(([la, lo]) => X(la, lo)), s = [0];
+  for (let i = 1; i < xy.length; i++) s.push(s[i - 1] + Math.hypot(xy[i][0] - xy[i - 1][0], xy[i][1] - xy[i - 1][1]));
+  // smin'den geri gitmeyen en yakın izdüşüm
+  const proj = (x, y, smin) => {
+    let b = null;
+    for (let i = 0; i < xy.length - 1; i++) {
+      if (s[i + 1] < smin) continue;
+      const [ax, ay] = xy[i], [bx, by] = xy[i + 1], dx = bx - ax, dy = by - ay, L = Math.hypot(dx, dy) || 1e-9;
+      let u = Math.max(0, Math.min(1, ((x - ax) * dx + (y - ay) * dy) / (L * L)));
+      if (s[i] + u * L < smin) u = (smin - s[i]) / L;
+      const px = ax + u * dx, py = ay + u * dy, d = Math.hypot(x - px, y - py);
+      if (!b || d < b.d) b = { d, i, px, py, s: s[i] + u * L };
+    }
+    return b;
+  };
+  const P = [];
+  let smin = 0, agree = 0, n = 0;
+  for (const q of pts) {
+    const [x, y] = X(q.lat, q.lon), b = proj(x, y, smin);
+    if (!b) return null;
+    P.push({ x, y, b });
+    smin = b.s;
+    const acc = q.acc || 20;
+    if (acc <= 60) { n++; if (b.d <= Math.min(100, Math.max(40, 1.5 * acc))) agree++; }
+  }
+  if (!n || agree / n < 0.7) return null;
+  const out = [];
+  let d = 0, prev = null;
+  for (const p of P) {
+    const via = [];
+    if (prev && p.b.s > prev.b.s) {
+      const chord = Math.hypot(p.b.px - prev.b.px, p.b.py - prev.b.py);
+      // yerel dolambaç (iz yapmadığı büyük kıvrım) varsa yolu izleme, düz bağla
+      if (p.b.s - prev.b.s <= chord * 3 + 150) for (let k = prev.b.i + 1; k <= p.b.i; k++) { const v = back(xy[k][0], xy[k][1]); via.push([v.lat, v.lon]); }
+    }
+    let lx = prev ? prev.b.px : p.b.px, ly = prev ? prev.b.py : p.b.py;
+    for (const v of via) { const [vx, vy] = X(v[0], v[1]); d += Math.hypot(vx - lx, vy - ly); lx = vx; ly = vy; }
+    d += Math.hypot(p.b.px - lx, p.b.py - ly);
+    const q = back(p.b.px, p.b.py);
+    out.push({ lat: q.lat, lon: q.lon, via: via.length ? via : null });
+    prev = p;
+  }
+  return { pts: out, d, road: true };
+}
+
 export function fuseSnap(pts, parts, mode) {
   const [NEAR0, FAR0, MOVE0] = FUSE[mode] || FUSE.walk, [VR, VS] = VIA[mode] || VIA.walk, [C0, C1, RUN_N, SIDE, CK] = CORR[mode] || CORR.walk;
   const lat0 = pts[0].lat, lon0 = pts[0].lon, kx = Math.cos((lat0 * Math.PI) / 180);
   const X = (la, lo) => [(lo - lon0) * M_DEG * kx, (la - lat0) * M_DEG];
   const back = (x, y) => ({ lat: lat0 + y / M_DEG, lon: lon0 + x / (M_DEG * kx) });
+  if (mode === 'car' || mode === 'bus') { const r = fullRoad(pts, parts, X, back); if (r) return r; }
   // Yol çizgileri: yalnız sürekli parçalar (g=1 boşluk bağlantısı yol değildir).
   // s: çizgi boyunca konum (m); n: her kesimin sol normali (yan kaydırma için)
   const lines = parts.filter((p) => !p.g && p.c.length >= 2).map((p) => {

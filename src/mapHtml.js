@@ -49,8 +49,11 @@ export const MAP_HTML = `<!doctype html>
     // Ekran pikseliyle hesaplandığı için yakınlaştırınca yeniden çizilir (boyları hep aynı kalır).
     function drawArrows(){
       ar.clearLayers();
+      if(map.getZoom()<12)return; // uzaktan bakınca oklar seçilmez; 30 günlük haritada telefonu yormasın
+      var vb=map.getBounds().pad(0.2);
       legsNow.forEach(function(l){
         if(!l.arrows||l.pts.length<2)return;
+        if(!vb.intersects(L.latLngBounds(l.pts)))return; // yalnız ekranda görünen çizgiler
         var P=l.pts.map(function(q){return map.latLngToLayerPoint(q);}), next=45;
         for(var i=1,acc=0;i<P.length;i++){
           var a=P[i-1],b=P[i],dx=b.x-a.x,dy=b.y-a.y,len=Math.sqrt(dx*dx+dy*dy);
@@ -66,7 +69,7 @@ export const MAP_HTML = `<!doctype html>
         }
       });
     }
-    map.on('zoomend',drawArrows);
+    map.on('zoomend moveend',drawArrows);
 
     // Canlı konum noktası: rota katmanından ayrı durur, her konum güncellemesinde yalnız o kayar.
     var meM=null,meA=null;

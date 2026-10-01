@@ -18,6 +18,7 @@ function db() {
     CREATE TABLE IF NOT EXISTS stat (k TEXT PRIMARY KEY, n INTEGER NOT NULL DEFAULT 0, last INTEGER);
     CREATE TABLE IF NOT EXISTS activity (t INTEGER PRIMARY KEY, k TEXT NOT NULL, c INTEGER NOT NULL DEFAULT 0);
     CREATE TABLE IF NOT EXISTS snap (k TEXT PRIMARY KEY, ok INTEGER NOT NULL, v TEXT NOT NULL, at INTEGER NOT NULL);
+    CREATE TABLE IF NOT EXISTS log (id INTEGER PRIMARY KEY AUTOINCREMENT, t INTEGER NOT NULL, k TEXT NOT NULL, v TEXT);
   `);
   // Şema yükseltme: eski kurulumlarda points tablosunda gidiş yönü (crs) sütunu yok — ekle.
   const cols = _db.getAllSync('PRAGMA table_info(points)').map((c) => c.name);
@@ -86,4 +87,17 @@ export function setSnaps(rows) {
 export function snapStats() { const r = db().getFirstSync('SELECT SUM(ok) AS ok, COUNT(*) AS n FROM snap'); return { ok: r.ok || 0, fail: (r.n || 0) - (r.ok || 0) }; }
 export function clearSnaps() { db().execSync('DELETE FROM snap;'); snapMem.clear(); }
 
-export function wipeAll() { db().execSync('DELETE FROM points; DELETE FROM places; DELETE FROM overrides; DELETE FROM kv; DELETE FROM activity; DELETE FROM stat; DELETE FROM snap;'); snapMem.clear(); }
+// Olay günlüğü (log): bastığın düğmeler, ayar değişiklikleri, tür düzeltmeleri, uygulama/kayıt/GPS olayları — saatle,
+// tek tek. Dışa aktarılan dosyaya girer (sonradan "ne oldu, kim ne yaptı" sırayla okunabilsin). 30 günden eskisi silinir.
+let logN = 0;
+export function addLog(k, v) {
+  try {
+    const d = db();
+    d.runSync('INSERT INTO log (t, k, v) VALUES (?, ?, ?)', Date.now(), k, v == null ? null : typeof v === 'string' ? v : JSON.stringify(v));
+    if (++logN % 200 === 1) d.runSync('DELETE FROM log WHERE t < ?', Date.now() - 30 * 86400e3);
+  } catch (e) { /* günlük yazılamasa da uygulama durmasın */ }
+}
+export function getLogs(a, b, limit = 100000) { return db().getAllSync('SELECT t, k, v FROM log WHERE t >= ? AND t < ? ORDER BY t DESC, id DESC LIMIT ?', a, b, limit); }
+export function logCount() { return db().getFirstSync('SELECT COUNT(*) AS n FROM log').n; }
+
+export function wipeAll() { db().execSync('DELETE FROM points; DELETE FROM places; DELETE FROM overrides; DELETE FROM kv; DELETE FROM activity; DELETE FROM stat; DELETE FROM snap; DELETE FROM log;'); snapMem.clear(); }

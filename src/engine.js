@@ -49,9 +49,11 @@ export const CFG = {
   BUS_MAX_V: 20,          // m/s (72 km/s) — şehir içi otobüs bundan hızlı gitmez
   BUS_WALK_D: 100,        // m — araçtan önce/sonra en az bu kadar yürüyüş (durağa yürüme)
   BUS_WAIT_MAX: 20 * 60e3,// ms — araçtan önceki kısa durak "durakta bekleme" sayılır
+  BUS_WAIT_RATE: 0.5,     // km başına en az bu kadar duruş: otobüs durak durak gider (araba 6,7 km'de 2 kez durdu)
   BUS_STOP_R: 30,         // m — duruş bu kadar yakınsa "otobüs durağında durdu"
   BUS_STOP_N: 3,          // en az bu kadar durakta duruş…
-  BUS_STOP_FRAC: 0.5,     // …ve duruşların en az yarısı durakta → otobüs
+  BUS_STOP_FRAC: 0.5,     // …ve duruşların en az yarısı durakta…
+  BUS_STOP_KM: 0.4,       // …ve km başına en az bu kadar durakta duruş → otobüs
   JAM_V: 3.1,             // m/s (11 km/s) — araçta bunun altı "trafikte yavaş" (tıxac süresine sayılır)
   WAIT_R: 15,             // m — yolculuk içinde bu yarıçapta kalınırsa "yerinde bekliyor" (kaba konumda büyür)
   WAIT_MIN: 40e3,         // ms — en kısa bekleme (ışık, durak, yaya bekleme)
@@ -357,7 +359,8 @@ function makeTrip(p, a, b, actAt) {
 
   // Duruşun yeri: yavaş kesimlerin (k0..k1) noktalarının ortancası
   const stopAt = (k0, k1, dur) => {
-    const q = sp.slice(k0, k1 + 2);
+    const q = sp.slice(k0, k1 + 2), mean = (f) => q.reduce((x, y) => x + f(y), 0) / q.length;
+    if (q.length <= 3) return { lat: mean((x) => x.lat), lon: mean((x) => x.lon), dur }; // az noktada ortalama
     return { lat: quantile(q.map((x) => x.lat), 0.5), lon: quantile(q.map((x) => x.lon), 0.5), dur };
   };
   const legs = runs.map((r) => {
@@ -575,9 +578,14 @@ function refineBus(items, busNear) {
       const rate = leg.stops / (leg.dist / 1000);
       const W = CFG.BUS_WALK_D;
       // Duruşların kaçı gerçek otobüs durağında (OSM)
-      leg.atStops = busNear ? leg.stopPts.filter((q) => busNear(q.lat, q.lon) <= CFG.BUS_STOP_R).length : null;
-      const atBus = leg.atStops != null && leg.atStops >= CFG.BUS_STOP_N && leg.atStops >= leg.stopPts.length * CFG.BUS_STOP_FRAC;
-      if (atBus || (waited && before >= W) || (rate >= CFG.BUS_STOPS_KM && (before >= W || after >= W)) || (rate >= CFG.BUS_STOPS_KM2 && before >= W && after >= W)) leg.mode = 'bus';
+      const uniq = [];
+      for (const q of leg.stopPts) if (!uniq.some((x) => hav(x, q) < 60)) uniq.push(q);
+      leg.atStops = busNear ? uniq.filter((q) => busNear(q.lat, q.lon) <= CFG.BUS_STOP_R).length : null;
+      const atBus = leg.atStops != null && leg.atStops >= CFG.BUS_STOP_N && leg.atStops >= uniq.length * CFG.BUS_STOP_FRAC && leg.atStops / (leg.dist / 1000) >= CFG.BUS_STOP_KM;
+      // "Durakta bekledi + yürüdü" ipucu artık durak durak gitmeyle birlikte aranır (km başına ≥ BUS_WAIT_RATE
+      // duruş): arabaya binmeden önce de 2-3 dk beklenir (1 Eki: 6,7 km'de 2 duruşlu araba "otobüs" sanıldı).
+      const busy = rate >= CFG.BUS_WAIT_RATE;
+      if (atBus || (waited && before >= W && busy) || (rate >= CFG.BUS_STOPS_KM && (before >= W || after >= W)) || (rate >= CFG.BUS_STOPS_KM2 && before >= W && after >= W)) leg.mode = 'bus';
     });
     setTripMode(trip);
     // Otobüs/metro ile başlayan yolculuğun hemen öncesindeki kısa durak = durakta/istasyonda bekleme.

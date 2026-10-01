@@ -15,7 +15,7 @@
 import { AppState } from 'react-native';
 import * as Location from 'expo-location';
 import * as TaskManager from 'expo-task-manager';
-import { insertPoints, insertActivity, getKV, setKV, bumpStat, getStats } from './store';
+import { insertPoints, insertActivity, getKV, setKV, bumpStat, getStats, addLog } from './store';
 
 const TASK = 'iz-konum-kaydi';
 const KEEPALIVE_MS = 5 * 60e3; // yerinde dururken de en az bu sıklıkta bir nokta sakla ("kayıt yaşıyor" izi)
@@ -95,11 +95,16 @@ const stillMs = () => (getKV('test_still', 0) || stillSec()) * 1000; // sınamad
 let power = 'high', anchor = null, stillSince = 0, curProfile = getKV('profile', 'birebir');
 // Varsayılan AÇIK (kullanıcı en az pil istedi, 1 Eki 2026). Ayarlar'dan kapatılabilir.
 const smartOn = () => stillSec() > 0 && curProfile !== 'pil';
+// Araçta otomatik navigasyon doğruluğu: hareket algılayıcısı "araçta" deyince GPS en yükseğe çıkar (araç
+// içinde, cepteki telefonda GPS zayıflıyor ve iOS Wi-Fi/baz konumuna düşüyordu — 1 Eki: ±20-166 m, hızsız).
+// İnince profilin doğruluğuna döner. Pil dostu profilde kapalı.
+const navOn = () => curProfile !== 'pil' && getKV('nav_auto', true);
+let actStillSince = 0; // hareket algılayıcısının kesintisiz "duruyor" dediği an (0 = demiyor)
 
-// Görev seçenekleri. lowPower: kaba doğruluk (durağan mod).
-function taskOptions(lowPower) {
+// Görev seçenekleri. p: güç kipi — 'low' kaba (durağan), 'nav' navigasyon (araçta), 'high' profilin doğruluğu.
+function taskOptions(p) {
   return {
-    accuracy: lowPower ? Location.Accuracy.Balanced : prof(curProfile).accuracy,
+    accuracy: p === 'low' ? Location.Accuracy.Balanced : p === 'nav' ? Location.Accuracy.BestForNavigation : prof(curProfile).accuracy,
     // distanceInterval BİLEREK verilmiyor (yukarıdaki iOS 16.4 kuralı): süzgeç JS'te (keep).
     activityType: Location.ActivityType.Other,
     pausesUpdatesAutomatically: false, // iOS durunca kaydı kendi kesmesin; tekrar başlatmayabiliyor
@@ -110,10 +115,11 @@ function taskOptions(lowPower) {
 }
 // Doğruluk kipini değiştir. Görev zaten kayıtlıyken startLocationUpdatesAsync yalnız seçenekleri günceller
 // (kayıt kesilmez).
-async function setPower(p) {
+async function setPower(p, why) {
   if (p === power) return;
+  addLog('gps-güç', power + ' → ' + p + (why ? ' (' + why + ')' : ''));
   power = p; count('power' + p);
-  try { if (await taskStarted()) await Location.startLocationUpdatesAsync(TASK, taskOptions(p === 'low')); } catch (e) { note('d_startErr', 'güç: ' + errText(e)); }
+  try { if (await taskStarted()) await Location.startLocationUpdatesAsync(TASK, taskOptions(p)); } catch (e) { note('d_startErr', 'güç: ' + errText(e)); }
 }
 let lastLocAt = 0; // iOS'tan en son konum gelen an (cihaz saati)
 function adapt(locations) {
@@ -121,11 +127,12 @@ function adapt(locations) {
   if (!smartOn()) { if (power === 'low') setPower('high'); return; }
   for (const l of locations) {
     const p = toPoint(l);
-    if (power === 'high') {
-      const still = anchor && (p.spd == null || p.spd < 0.5) && dist(anchor, p) <= STILL_R;
-      if (!still) { anchor = p; stillSince = p.t; } else if (p.t - stillSince >= stillMs()) setPower('low');
+    if (power !== 'low') {
+      // ev içinde konum hızsız ve 10-60 m oynar: yarıçap doğrulukla büyür (yoksa "kıpırdadı" sanılıp GPS hiç kısılmıyordu)
+      const still = anchor && (p.spd == null || p.spd < 0.5) && dist(anchor, p) <= Math.max(STILL_R, (p.acc || 0) * 1.5);
+      if (!still) { anchor = p; stillSince = p.t; } else if (p.t - stillSince >= stillMs()) setPower('low', 'konum yerinde');
     } else if ((p.spd != null && p.spd > WAKE_V) || (anchor && dist(anchor, p) > Math.max(WAKE_R, (p.acc || 0) * 1.2))) {
-      anchor = p; stillSince = p.t; setPower('high');
+      anchor = p; stillSince = p.t; setPower(lastAct && lastAct.k === 'A' && navOn() ? 'nav' : 'high', 'kıpırdadı');
     }
   }
 }
@@ -133,7 +140,7 @@ function adapt(locations) {
 TaskManager.defineTask(TASK, async ({ data, error, executionInfo }) => {
   if (error) {
     // kCLError 0 = "konum şu an bilinmiyor": geçicidir, iOS denemeyi sürdürür — hata diye gösterme.
-    if (error.code !== 0) note('d_taskErr', errText(error));
+    if (error.code !== 0) { note('d_taskErr', errText(error)); addLog('hata', 'görev: ' + errText(error)); }
     count('taskerr'); return;
   }
   if (!data || !data.locations) return;
@@ -153,7 +160,9 @@ setInterval(() => {
   count('beat');
   if (++beatN % 12 === 0) flushStats(); // dakikada bir diske
   // Hiç kıpırdamayınca iOS konum göndermeyebilir (adapt çağrılmaz): o zaman da durgun sayıp GPS'i kıs.
-  if (smartOn() && power === 'high' && lastLocAt && Date.now() - lastLocAt >= stillMs()) setPower('low');
+  if (smartOn() && power !== 'low' && lastLocAt && Date.now() - lastLocAt >= stillMs()) setPower('low', 'konum gelmiyor');
+  // Hareket algılayıcısı süredir "duruyor" diyorsa (gece masada) konum oynasa da GPS'i kıs
+  else if (smartOn() && power !== 'low' && actStillSince && Date.now() - actStillSince >= stillMs()) setPower('low', 'algılayıcı: duruyor');
 }, 5000);
 AppState.addEventListener('change', (s) => { count('app', 1, s); flushStats(); });
 
@@ -180,18 +189,20 @@ export async function start(profile = 'birebir') {
     const bg = mode ? await Location.getBackgroundPermissionsAsync() : await Location.requestBackgroundPermissionsAsync().catch(() => ({ granted: false }));
     note('d_perm', fg.status + '/' + (fg.ios ? fg.ios.scope : '?') + ' bg:' + bg.status);
     if (await taskStarted()) await Location.stopLocationUpdatesAsync(TASK);
-    const opt = taskOptions(false);
+    const opt = taskOptions('high');
     if (mode === 'taskdf') opt.distanceInterval = 3;
     if (mode === 'tasknoind') opt.showsBackgroundLocationIndicator = false;
     await Location.startLocationUpdatesAsync(TASK, opt);
     note('d_startErr', null); note('d_startAt', Date.now());
-  } catch (e) { note('d_startErr', errText(e)); }
+    addLog('kayıt-başladı', profile + ' · izin ' + fg.status + '/' + bg.status + (mode ? ' · sınama ' + mode : ''));
+  } catch (e) { note('d_startErr', errText(e)); addLog('hata', 'başlatma: ' + errText(e)); }
   return status();
 }
 
 export async function stop() {
   try {
     if (await taskStarted()) await Location.stopLocationUpdatesAsync(TASK);
+    addLog('kayıt-durdu', null);
   } catch (e) { note('d_startErr', 'durdurma: ' + errText(e)); }
   return status();
 }
@@ -224,7 +235,13 @@ function onActivity(a) {
   if (lastSaved && lastSaved.k === k && lastSaved.c === c) { lastAct = c >= 1 ? { k, c } : null; return; } // değişmedi
   lastSaved = { k, c };
   lastAct = c >= 1 ? { k, c } : null;
-  if (power === 'low' && c >= 1 && k !== 'S' && k !== 'U') setPower('high'); // kıpırdadı: GPS'i hemen aç
+  // Güç kararları: araçta → navigasyon doğruluğu; yürüyor/koşuyor/bisiklette → profilin doğruluğu (kısıksa
+  // hemen açılır); "duruyor" başlangıcı not edilir (kalp atışı 2 dk sürünce GPS'i kısar).
+  if (c >= 1) {
+    if (k === 'S') { if (!actStillSince) actStillSince = Date.now(); } else actStillSince = 0;
+    if (k === 'A' && navOn()) { if (power !== 'nav') setPower('nav', 'algılayıcı: araçta'); }
+    else if ((k === 'W' || k === 'R' || k === 'C' || (k === 'A' && power === 'low')) && power !== 'high') setPower('high', 'algılayıcı: ' + ({ W: 'yürüyor', R: 'koşuyor', C: 'bisiklet', A: 'araçta' }[k]));
+  }
   try { insertActivity(Math.round(a.timestamp || Date.now()), k, c); count('act'); } catch (e) { /* yoksay */ }
 }
 // Dinlemeye başlar (ilk seferde iOS "Hareket ve Fitness" iznini sorar). İzin verilmezse tür ayrımı
@@ -292,4 +309,4 @@ export async function geocode(lat, lon) {
 // Akıllı pil tasarrufunu aç/kapat (Ayarlar).
 export function setSmart(on) { setKV('smart', !!on); if (!on) setPower('high'); }
 // "Durunca GPS'i kıs" süresi (sn; 0 = hiç kısma). Kapatınca GPS hemen tam doğruluğa döner.
-export function setStill(sec) { setKV('still_s', sec); if (!sec) setPower('high'); }
+export function setStill(sec) { setKV('still_s', sec); if (!sec) setPower('high', 'kısma kapatıldı'); }
