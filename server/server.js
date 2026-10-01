@@ -26,7 +26,7 @@ try {
 const PORT = Number(process.env.PORT) || 3700;
 const KEY = process.env.IZ_KEY || '';
 const OSRM = { foot: process.env.OSRM_FOOT || 'http://127.0.0.1:3701', car: process.env.OSRM_CAR || 'http://127.0.0.1:3702' };
-const V = 1; // kural sürümü — eşleştirme mantığı değişince artır
+const V = 2; // kural sürümü — eşleştirme mantığı değişince artır (telefon v büyüyünce oturmayan parçaları yeniden sorar)
 
 // Tür → yol ağı ve ayarlar.
 //   gap:  bundan yakın ardışık noktalar seyreltilir (m) — çok sık nokta eşleştirmeyi iyileştirmez, yavaşlatır
@@ -93,7 +93,8 @@ async function matchLeg(leg) {
     pts.push(q);
   }
   if (pts.length < 3) return { id, ok: false, why: 'az' };
-  if (pts.length > MAX_PTS) return { id, ok: false, why: 'cok' };
+  // Çok uzun parça (ör. 3 saatlik şehirlerarası sürüş, 1 Hz): reddetmek yerine sığacak kadar seyrelt (son nokta kalır)
+  if (pts.length > MAX_PTS) { const st = Math.ceil(pts.length / MAX_PTS), last = pts[pts.length - 1], thin = pts.filter((_, i) => i % st === 0); if (thin[thin.length - 1] !== last) thin.push(last); pts.length = 0; pts.push(...thin); }
 
   // 3) OSRM'e CHUNK'lık dilimlerle sor; ardışık dilimler sınır noktasını paylaşır (çizgi kopmasın).
   const ms = []; // eşleşmeler, iz sırasıyla: {c: [[lat, lon], ...], d: metre}
@@ -130,7 +131,10 @@ async function matchLeg(leg) {
   //    uydurmuş demektir (tek yön, haritada eksik geçit...) → kabul etme; telefon kendi düzeltmesiyle çizer.
   let raw = 0;
   for (let i = 1; i < pts.length; i++) raw += hav(pts[i - 1], pts[i]);
-  if (d > raw * 1.35 + 80) return { id, ok: false, why: 'dolambac', d: Math.round(d), raw: Math.round(raw) };
+  // Seyrek noktada (araçta kaba GPS: 50 sn'de bir, 500 m aralık) kirişler gerçek yolu hep küçümser;
+  // sıkı noktada 1,35, seyrekte 2,5'e kadar pay ver. Telefon ayrıca kendi dolambaç denetimini yapar (fullRoad).
+  const spacing = raw / Math.max(1, pts.length - 1), ratio = spacing > 100 ? 2.5 : spacing > 40 ? 1.8 : 1.35;
+  if (d > raw * ratio + 80) return { id, ok: false, why: 'dolambac', d: Math.round(d), raw: Math.round(raw) };
   return { id, ok: true, d: Math.round(d), cover: +cover.toFixed(2), parts };
 }
 

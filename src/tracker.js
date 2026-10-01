@@ -102,6 +102,7 @@ const smartOn = () => stillSec() > 0 && curProfile !== 'pil';
 // İnince profilin doğruluğuna döner. Pil dostu profilde kapalı.
 const navOn = () => curProfile !== 'pil' && getKV('nav_auto', true);
 let actStillSince = 0; // hareket algılayıcısının kesintisiz "duruyor" dediği an (0 = demiyor)
+let recOn = false;     // kayıt görevi bu süreçte başlatıldı mı (kalp atışı güç kararları yalnız o zaman)
 
 // Görev seçenekleri. p: güç kipi — 'low' kaba (durağan), 'nav' navigasyon (araçta), 'high' profilin doğruluğu.
 function taskOptions(p) {
@@ -132,9 +133,11 @@ function adapt(locations) {
     if (power !== 'low') {
       // ev içinde konum hızsız ve 10-60 m oynar: yarıçap doğrulukla büyür (yoksa "kıpırdadı" sanılıp GPS hiç kısılmıyordu)
       const still = anchor && (p.spd == null || p.spd < 0.5) && dist(anchor, p) <= Math.max(STILL_R, (p.acc || 0) * 1.5);
-      if (!still) { anchor = p; stillSince = p.t; } else if (p.t - stillSince >= stillMs()) setPower('low', 'konum yerinde');
+      // algılayıcı "araçta" diyorsa ışıkta/tıxacda durmak GPS'i kısmaz (kalkınca kaba konumla ilk 200 m kaybolurdu)
+      if (!still) { anchor = p; stillSince = p.t; } else if (p.t - stillSince >= stillMs() && !(lastAct && lastAct.k === 'A')) setPower('low', 'konum yerinde');
     } else if ((p.spd != null && p.spd > WAKE_V) || (anchor && dist(anchor, p) > Math.max(WAKE_R, (p.acc || 0) * 1.2))) {
-      anchor = p; stillSince = p.t; setPower(lastAct && lastAct.k === 'A' && navOn() ? 'nav' : 'high', 'kıpırdadı');
+      anchor = p; stillSince = p.t; actStillSince = 0; // kıpırdadı: algılayıcının eski "duruyor"u geçersiz (yoksa 5 sn sonra yeniden kısılırdı)
+      setPower(lastAct && lastAct.k === 'A' && navOn() ? 'nav' : 'high', 'kıpırdadı');
     }
   }
 }
@@ -162,6 +165,7 @@ setInterval(() => {
   count('beat');
   if (++beatN % 12 === 0) flushStats(); // dakikada bir diske
   // Hiç kıpırdamayınca iOS konum göndermeyebilir (adapt çağrılmaz): o zaman da durgun sayıp GPS'i kıs.
+  if (!recOn) return; // kayıt kapalıyken güç kararı yok
   if (smartOn() && power !== 'low' && lastLocAt && Date.now() - lastLocAt >= stillMs()) setPower('low', 'konum gelmiyor');
   // Hareket algılayıcısı süredir "duruyor" diyorsa (gece masada) konum oynasa da GPS'i kıs
   else if (smartOn() && power !== 'low' && actStillSince && Date.now() - actStillSince >= stillMs()) setPower('low', 'algılayıcı: duruyor');
@@ -183,7 +187,8 @@ export async function status() {
 // Hata olursa fırlatmaz: tanı kaydına yazar ve gerçek durumu döner.
 export async function start(profile = 'birebir') {
   const mode = testMode(), P = prof(profile);
-  minDist = P.minDist; slowDist = P.slow; curProfile = profile; power = 'high'; anchor = null;
+  minDist = P.minDist; slowDist = P.slow; curProfile = profile; anchor = null; actStillSince = 0;
+  if (power !== 'high') setPower('high', 'başlat'); // günlükte "kısıldı" varsa "açıldı" da olsun
   try {
     const fg = await Location.requestForegroundPermissionsAsync();
     if (!fg.granted) { note('d_startErr', 'konum izni verilmedi'); return status(); }
@@ -195,6 +200,7 @@ export async function start(profile = 'birebir') {
     if (mode === 'taskdf') opt.distanceInterval = 3;
     if (mode === 'tasknoind') opt.showsBackgroundLocationIndicator = false;
     await Location.startLocationUpdatesAsync(TASK, opt);
+    recOn = true; lastLocAt = Date.now();
     startBattery(() => power); startBarometer();
     note('d_startErr', null); note('d_startAt', Date.now());
     addLog('kayıt-başladı', profile + ' · izin ' + fg.status + '/' + bg.status + (mode ? ' · sınama ' + mode : ''));
@@ -206,6 +212,7 @@ export async function stop() {
   try {
     if (await taskStarted()) await Location.stopLocationUpdatesAsync(TASK);
     stopBattery(); stopBarometer();
+    recOn = false; lastLocAt = 0; actStillSince = 0; anchor = null;
     addLog('kayıt-durdu', null);
   } catch (e) { note('d_startErr', 'durdurma: ' + errText(e)); }
   return status();
@@ -236,7 +243,11 @@ function onActivity(a) {
   // Düşük güvenli okumalar (telefon masadayken saniyede birkaç kez "bilinmiyor/duruyor" diye titrer) tür
   // ayrımında kullanılmaz: yalnız güvenli bir durumun BİTTİĞİNİ işaretlemek için bir kez yazılır.
   if (c < 1) { k = 'U'; if (!lastSaved || lastSaved.c < 1) { lastAct = null; return; } }
-  if (lastSaved && lastSaved.k === k && lastSaved.c === c) { lastAct = c >= 1 ? { k, c } : null; return; } // değişmedi
+  if (lastSaved && lastSaved.k === k && lastSaved.c === c) { // değişmedi
+    lastAct = c >= 1 ? { k, c } : null;
+    if (c >= 1 && k === 'A' && power === 'low' && navOn()) setPower('nav', 'algılayıcı: araçta'); // ışıkta kısıldıysa kalkışta geri aç
+    return;
+  }
   lastSaved = { k, c };
   lastAct = c >= 1 ? { k, c } : null;
   // Güç kararları: araçta → navigasyon doğruluğu; yürüyor/koşuyor/bisiklette → profilin doğruluğu (kısıksa

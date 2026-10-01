@@ -9,7 +9,10 @@ export const SNAP_HOST = 'iz.80-240-17-26.sslip.io';
 const URL_ = 'https://' + SNAP_HOST + '/v1/match';
 const KEY = process.env.EXPO_PUBLIC_IZ_KEY || ''; // derlemede verilir (GitHub gizli değişkeni), depoda yok
 const BATCH = 10;           // tek istekte en çok parça
+const BATCH_PTS = 2500;     // tek istekte en çok nokta (sunucu bir isteği ~20 sn içinde bitirsin; telefon 30 sn bekler)
 const RETRY_MS = 5 * 60e3;  // hata sonrası bekleme
+const FAIL_TTL = 7 * 86400e3; // oturmayan parça bu kadar sonra bir daha sorulur (harita/kural iyileşmiş olabilir)
+const ERR_TTL = 60 * 60e3;    // ağ/sunucu hatası alan grup bu kadar süre atlanır (arkadaki gruplar beklemesin)
 
 export const available = () => !!KEY;
 export const enabled = () => !!KEY && store.getKV('snap', true);
@@ -17,33 +20,50 @@ export const setEnabled = (v) => store.setKV('snap', !!v);
 
 // analyze() için: önbellekte başarılı sonuç varsa {parts}, yoksa null
 export function lookup(leg) {
-  if (!SNAP_MODES[leg.mode]) return null;
+  if (!SNAP_MODES[leg.autoMode || leg.mode]) return null;
   const r = store.getSnap(snapKey(leg));
   return r && r.ok ? r : null;
 }
 
 let busy = false, nextTry = 0;
 export const status = { at: null, err: null }; // son başarılı soru anı / son hata (Ayarlar'da gösterilir)
+// Anahtar "biliniyor" mu: başarılı sonuç her zaman; başarısız sonuç yalnız taze (TTL) ve sunucu kuralı değişmemişse.
+// Böylece sunucudaki eşleştirme iyileşince (v artınca) ya da bir hafta sonra oturmayan parçalar yeniden sorulur.
+function known(k) {
+  const r = store.getSnap(k);
+  if (!r) return false;
+  if (r.ok) return true;
+  const sv = store.getKV('snap_sv', 0);
+  if (r.sv != null && sv > r.sv) return false;
+  return Date.now() - (r.at || 0) < (r.tmp ? ERR_TTL : FAIL_TTL);
+}
 
 // Eksik parçaları sor ve sakla. Dönüş: yeni sonuç geldiyse true (analiz yenilensin).
 export async function fill(items) {
   if (!enabled() || busy || Date.now() < nextTry) return false;
-  const todo = snapCandidates(items, Date.now(), (k) => store.getSnap(k) != null);
+  const todo = snapCandidates(items, Date.now(), known);
   if (!todo.length) return false;
   busy = true;
   let got = 0;
+  // Gruplar: en çok BATCH parça ve BATCH_PTS nokta (tek dev parça kendi başına gider)
+  const groups = [];
+  for (const x of todo) { const g = groups[groups.length - 1]; if (g && g.length < BATCH && g.reduce((n, y) => n + y.leg.p.length, 0) + x.leg.p.length <= BATCH_PTS) g.push(x); else groups.push([x]); }
   try {
-    for (let i = 0; i < todo.length; i += BATCH) {
-      const part = todo.slice(i, i + BATCH);
+    for (const part of groups) {
       const ctl = new AbortController(), tm = setTimeout(() => ctl.abort(), 30e3);
-      let res;
+      let res, j;
       try {
         res = await fetch(URL_, { method: 'POST', headers: { 'content-type': 'application/json', 'x-iz-key': KEY }, body: JSON.stringify({ legs: part.map((x) => x.leg) }), signal: ctl.signal });
+        if (!res.ok) throw new Error('sunucu ' + res.status);
+        j = await res.json();
+      } catch (e) {
+        // Bu grup hata aldı: bir saatliğine "ertelendi" olarak işaretle ki sıradaki gruplar beklemesin; sonra dur.
+        store.setSnaps(part.map((x) => [x.k, { ok: false, why: 'hata', tmp: true, at: Date.now() }]));
+        throw e;
       } finally { clearTimeout(tm); }
-      if (!res.ok) throw new Error('sunucu ' + res.status);
-      const j = await res.json();
-      // Oturmayan parça da saklanır (ok:false) — aynı veriyle yeniden sormak aynı cevabı verir.
-      const rows = (j.legs || []).filter((r) => r && r.id).map((r) => [r.id, r.ok ? { ok: true, parts: r.parts } : { ok: false, why: r.why || '?' }]);
+      if (j.v != null) store.setKV('snap_sv', j.v); // sunucunun kural sürümü (oturmayanları yeniden sormak için)
+      // Oturmayan parça da saklanır (ok:false, tarih + sunucu sürümüyle) — aynı veriyle yeniden sormak aynı cevabı verir.
+      const rows = (j.legs || []).filter((r) => r && r.id).map((r) => [r.id, r.ok ? { ok: true, parts: r.parts } : { ok: false, why: r.why || '?', at: Date.now(), sv: j.v }]);
       store.setSnaps(rows);
       got += rows.length;
     }

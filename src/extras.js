@@ -54,10 +54,11 @@ export async function exportData(from, to) {
   lines.push('S,k,n,last');
   const st = getStats();
   for (const k of Object.keys(st)) lines.push('S,' + k + ',' + st[k].n + ',' + (st[k].last || ''));
-  lines.push('K,profile,' + getKV('profile', 'birebir'), 'K,smart,' + getKV('smart', true), 'K,still_s,' + getKV('still_s', ''));
+  const csv = (v) => '"' + String(v == null ? '' : v).replace(/"/g, '""').replace(/[\r\n]+/g, ' ') + '"'; // virgül/tırnak içeren değer
+  lines.push('K,profile,' + getKV('profile', 'birebir'), 'K,smart,' + getKV('smart', true), 'K,still_s,' + getKV('still_s', ''), 'K,lock,' + getKV('lock', false));
   // Olay günlüğü: düğmeler, ayarlar, uygulama/kayıt/GPS olayları (eskiden yeniye)
   lines.push('L,t,k,v');
-  for (const r of getLogs(from, to).reverse()) lines.push('L,' + r.t + ',' + r.k + ',' + String(r.v == null ? '' : r.v).replace(/[\r\n]+/g, ' '));
+  for (const r of getLogs(from, to).reverse()) lines.push('L,' + r.t + ',' + r.k + ',' + csv(r.v));
   const d = new Date();
   const f = new File(Paths.cache, 'iz-veri-' + d.getFullYear() + '-' + (d.getMonth() + 1) + '-' + d.getDate() + '.csv');
   f.create({ overwrite: true });

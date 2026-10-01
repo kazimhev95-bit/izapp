@@ -114,4 +114,9 @@ export function putTiles(rows) { const d = db(); d.withTransactionSync(() => { f
 export function tileStats() { const r = db().getFirstSync('SELECT COUNT(*) AS n, COALESCE(SUM(LENGTH(b)), 0) AS bytes FROM tile'); return { n: r.n, mb: (r.bytes * 0.75) / 1048576 }; }
 export function clearTiles() { db().execSync('DELETE FROM tile;'); }
 
-export function wipeAll() { db().execSync('DELETE FROM points; DELETE FROM places; DELETE FROM overrides; DELETE FROM kv; DELETE FROM activity; DELETE FROM stat; DELETE FROM snap; DELETE FROM log; DELETE FROM battery;'); snapMem.clear(); }
+// Tüm VERİYİ sil: konumlar, yerler, düzeltmeler, hareket, sayaçlar, yola oturtma, günlük, pil, çevrimdışı karolar.
+// AYARLAR kalır (kilit, profil, GPS kısma, katmanlar…) — yalnız veriye bağlı anahtarlar (ev/iş ipucu, durak listesi) silinir.
+export function wipeAll() {
+  db().execSync("DELETE FROM points; DELETE FROM places; DELETE FROM overrides; DELETE FROM activity; DELETE FROM stat; DELETE FROM snap; DELETE FROM log; DELETE FROM battery; DELETE FROM tile; DELETE FROM kv WHERE k IN ('hints', 'busstops', 'applied');");
+  snapMem.clear();
+}

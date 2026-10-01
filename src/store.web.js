@@ -65,4 +65,4 @@ export function setSnaps(rows) { for (const [k, v] of rows) snaps.set(k, v); }
 export function snapStats() { let ok = 0; for (const v of snaps.values()) if (v.ok) ok++; return { ok, fail: snaps.size - ok }; }
 export function clearSnaps() { snaps.clear(); }
 
-export function wipeAll() { acts = []; points = []; places = []; overrides = {}; kv = {}; snaps.clear(); logs = []; }
+export function wipeAll() { acts = []; points = []; places = []; overrides = {}; for (const k of ['hints', 'busstops', 'applied']) delete kv[k]; snaps.clear(); logs = []; bat = []; tiles.clear(); }

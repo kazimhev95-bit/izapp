@@ -421,7 +421,7 @@ function GunlukTab({ data, day, setDay, onTrip, onPlace, steps }) {
                 icon={<Feather name={it.wait ? 'clock' : KIND_ICON[it.place.kind] || 'map-pin'} size={14} color={it.wait ? C.warn : C.accent} />}
                 right={<Text style={s.num}>{fmtDur(it.t1 - it.t0)}</Text>}>
                 <Text style={s.tlTitle} numberOfLines={1}>{it.wait ? 'Durakta bekleme' : it.place.name}</Text>
-                <Text style={s.dim}>{fmtClock(it.t0)} – {now - it.t1 < 60e3 ? 'şimdi' : fmtClock(it.t1)}{it.wait ? ' · ' + it.place.name : ''}</Text>
+                <Text style={s.dim}>{fmtClock(it.t0)} – {i === 0 && now - it.t1 < 6 * 60e3 ? 'şimdi' : fmtClock(it.t1)}{it.wait ? ' · ' + it.place.name : ''}</Text>
               </TLRow>
             );
             if (it.type === 'gap') return (
@@ -431,7 +431,7 @@ function GunlukTab({ data, day, setDay, onTrip, onPlace, steps }) {
             );
             // Yolculuk: nereden → nereye, parça simgeleri + mesafeleri, orantılı renk çubuğu, kısa not
             const legsV = it.overridden ? [{ mode: it.mode, dist: it.dist }] : it.legs;
-            const waits = it.legs.reduce((n, l) => n + (l.waits ? l.waits.length : 0), 0), st = tripStops(it);
+            const waits = it.overridden ? 0 : it.legs.reduce((n, l) => n + (l.waits && (l.mode === 'walk' || l.mode === 'bike') ? l.waits.length : 0), 0), st = tripStops(it);
             const weak = it.legs.some((l) => l.gps && l.gps.lvl === 'zayıf');
             const title = stName(it.fromStay) && stName(it.toStay) ? stName(it.fromStay) + ' → ' + stName(it.toStay) : MODE[it.mode].label;
             const note = [waits ? waits + ' bekleme' : '', st ? st + ' duruş' : '', weak ? 'GPS zayıf yer var' : ''].filter(Boolean).join(' · ');
@@ -504,7 +504,7 @@ function ModeBars({ days, width }) {
   );
 }
 
-function AnalizTab({ trk, hints, rev, onPlace, onTrip, onSnap }) {
+function AnalizTab({ trk, hints, rev, onPlace, onTrip, onSnap, minute }) {
   const [span, setSpan] = useState(7);
   const [off, setOff] = useState(0); // kaç dönem geriye
   const [open, setOpen] = useState(null); // açık rutin
@@ -537,8 +537,14 @@ function AnalizTab({ trk, hints, rev, onPlace, onTrip, onSnap }) {
       }
       r.mode = Object.keys(cnt).sort((a, b) => cnt[b] - cnt[a])[0] || r.mode;
     }
+    // Adsız yerlerin adı ("Konum N") gün analizinde başka, dönem analizinde başka sıraya göre gelir;
+    // yolculukların uçlarını dönemin yerine eşle ki YOLCULUKLAR ile YERLER aynı adı kullansın.
+    for (const t of trips) for (const key of ['fromStay', 'toStay']) {
+      const st = t[key];
+      if (st && st.place && !st.place.saved) { const bp = base.places.find((p) => hav(p, st) <= 150); if (bp) st.place = bp; }
+    }
     return { ...base, trips, totals };
-  }, [from, to, rev, trk.running]);
+  }, [from, to, rev, trk.running, minute]);
   // Dönemin bitmiş parçalarını sunucuya sor (önbellekte olmayanlar); yeni sonuç gelince yenile
   useEffect(() => { snap.fill(data.trips).then((got) => got && onSnap()); }, [data]);
   const t = data.totals, maxPlace = Math.max(1, ...data.places.map((p) => p.total));
@@ -605,8 +611,8 @@ function AnalizTab({ trk, hints, rev, onPlace, onTrip, onSnap }) {
           {data.places.length ? data.places.slice(0, 12).map((p) => (
             <TouchableOpacity key={p.id} style={{ paddingVertical: 7 }} onPress={() => onPlace(p)}>
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                <Feather name={KIND_ICON[p.kind] || 'map-pin'} size={15} color={C.accent} />
-                <Text style={[s.tx, { flex: 1 }]} numberOfLines={1}>{p.name}</Text>
+                <Feather name={p.waitOnly ? 'clock' : KIND_ICON[p.kind] || 'map-pin'} size={15} color={p.waitOnly ? C.warn : C.accent} />
+                <Text style={[s.tx, { flex: 1 }]} numberOfLines={1}>{p.name}{p.waitOnly ? ' (bekleme)' : ''}</Text>
                 <Text style={s.num}>{fmtDur(p.total)}</Text>
               </View>
               <View style={s.barBg}><View style={[s.barFg, { width: (p.total / maxPlace) * 100 + '%' }]} /></View>
@@ -699,7 +705,6 @@ function AyarlarTab({ trk, onToggle, profile, setProfile, onWipe, rev, onSnapRes
   const [lock, setLockS] = useState(() => pro.lockOn());
   const [lockOk, setLockOk] = useState(null);
   useEffect(() => { pro.lockAvailable().then(setLockOk); }, []);
-  const [off, setOffS] = useState(() => offline.offlineOn());
   const [dl, setDl] = useState(null); // {done, total} indirme ilerlemesi
   const tiles = useMemo(() => offline.tileStats(), [rev, dl]);
   const doDownload = async () => {
@@ -773,10 +778,10 @@ function AyarlarTab({ trk, onToggle, profile, setProfile, onWipe, rev, onSnapRes
         <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
           {STILLS.map(([sec, label]) => <Chip key={sec} label={label} active={still === sec} onPress={() => { tracker.setStill(sec); setStillS(sec); store.addLog('ayar', "durunca GPS'i kıs: " + (sec ? sec + ' sn' : 'hiç')); }} />)}
         </View>
-        <Text style={[s.dim, { marginTop: 8 }]}>{still ? (STILLS.find((x) => x[0] === still) || [0, still + ' sn'])[1] + ' yerinden kıpırdamazsan GPS kısılır (kayıt sürer, Wi-Fi/baz ~100 m); yürümeye ya da araca binmeye başlayınca anında tam doğruluğa döner. Işıkta/durakta kısa beklemek GPS’i kısmaz.' : 'GPS hep tam açık: en eksiksiz kayıt (duraktan çıkışın ilk metreleri bile), en çok pil.'}</Text>
+        <Text style={[s.dim, { marginTop: 8 }]}>{profile === 'pil' ? 'Pil dostu profilde konum zaten kaba (Wi-Fi/baz): ayrıca kısma ve araçta navigasyon doğruluğu uygulanmaz.' : still ? (STILLS.find((x) => x[0] === still) || [0, still + ' sn'])[1] + ' yerinden kıpırdamazsan GPS kısılır (kayıt sürer, Wi-Fi/baz ~100 m); yürümeye ya da araca binmeye başlayınca anında tam doğruluğa döner. Işıkta/durakta kısa beklemek GPS’i kısmaz.' : 'GPS hep tam açık: en eksiksiz kayıt (duraktan çıkışın ilk metreleri bile), en çok pil.'}</Text>
         <View style={s.infoBox}>
           <Text style={s.tx}>Şu anki düzen: hareket halinde ~{(PROF_M[profile] || PROF_M.birebir)[0]} m’de, yavaşken ~{(PROF_M[profile] || PROF_M.birebir)[1]} m’de bir nokta; {still && profile !== 'pil' ? (STILLS.find((x) => x[0] === still) || [0, still + ' sn'])[1] + ' durunca GPS kısılır' : 'GPS hiç kısılmaz'}.</Text>
-          <Text style={[s.dim, { marginTop: 3 }]}>GPS şu an: {dg.power === 'low' ? 'kısık (duruyorsun)' : dg.power === 'nav' ? 'navigasyon (araçtasın)' : 'tam doğruluk'}. Araçta GPS kendiliğinden navigasyon doğruluğuna çıkar. En doğru çizgi için: Maksimum ya da Birebir + «Hiç» — telefonu cepte değil, üst tarafı açıkta taşımak da GPS’i iyileştirir.</Text>
+          <Text style={[s.dim, { marginTop: 3 }]}>GPS şu an: {dg.power === 'low' ? 'kısık (duruyorsun)' : dg.power === 'nav' ? 'navigasyon (araçtasın)' : 'tam doğruluk'}.{profile !== 'pil' ? ' Araçta GPS kendiliğinden navigasyon doğruluğuna çıkar.' : ''} En doğru çizgi için: Maksimum ya da Birebir + «Hiç» — telefonu cepte değil, üst tarafı açıkta taşımak da GPS’i iyileştirir.</Text>
         </View>
       </Card>
       <Card title="PRO">
@@ -791,13 +796,12 @@ function AyarlarTab({ trk, onToggle, profile, setProfile, onWipe, rev, onSnapRes
           }} />
         </View>
         <Text style={s.dim}>Açıkken uygulama her öne gelişinde (30 sn’den uzun arkada kaldıysa) Face ID ister. Kayıt arka planda kilitten bağımsız sürer.</Text>
-        {/* Çevrimdışı harita */}
+        {/* Çevrimdışı harita: indirilen karolar her zaman kullanılır (ayrı anahtar yok) */}
         <View style={[s.row, { marginTop: 8 }]}>
-          <Feather name="download-cloud" size={15} color={off ? C.ok : C.dim} />
+          <Feather name="download-cloud" size={15} color={tiles.n ? C.ok : C.dim} />
           <Text style={[s.tx, { flex: 1 }]}>Çevrimdışı harita</Text>
-          <Chip label={off ? 'Açık' : 'Kapalı'} active={off} onPress={() => { offline.setOffline(!off); setOffS(!off); }} />
         </View>
-        <Text style={s.dim}>Son 30 günde gezdiğin bölgenin harita karoları (yakınlık 11–16) telefona indirilir; internet yokken de harita açılır. Daha yakın bakış yine internetten gelir.</Text>
+        <Text style={s.dim}>Son 30 günde gezdiğin bölgenin harita karoları (yakınlık 11–16) telefona indirilir ve harita onları internetsiz de kullanır. Daha yakın bakış internetten gelir. «Tüm veriyi sil» karoları da siler.</Text>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 8 }}>
           <TouchableOpacity style={s.btn} disabled={!!dl} onPress={doDownload}><Text style={s.btnTx}>{dl ? (dl.total ? 'İndiriliyor ' + dl.done + '/' + dl.total : 'Hazırlanıyor…') : 'Bölgeyi indir'}</Text></TouchableOpacity>
           <Text style={[s.dim, { flex: 1 }]}>{tiles.n ? fmtInt(tiles.n) + ' karo · ' + tiles.mb.toFixed(1) + ' MB' : 'indirilmiş karo yok'}</Text>
@@ -813,7 +817,7 @@ function AyarlarTab({ trk, onToggle, profile, setProfile, onWipe, rev, onSnapRes
               <Text style={[s.tx, { flex: 1 }]}>Çizgiyi yola oturt</Text>
               <Chip label={snapOn ? 'Açık' : 'Kapalı'} active={snapOn} onPress={() => { snap.setEnabled(!snapOn); setSnapOn(!snapOn); onSnapReset(); store.addLog('ayar', 'yola oturtma: ' + (!snapOn ? 'açık' : 'kapalı')); }} />
             </View>
-            <Text style={s.dim}>Bitmiş yolculukların GPS noktaları kendi sunucuna ({snap.SNAP_HOST}) gider; sunucu onları Azerbaycan yol haritasına oturtup çizgiyi geri yollar, hiçbir şey saklamaz. Çizgi gerçek izinden en çok ~12 m sapar: yol yakınsa yola oturur, değilse iz olduğu gibi kalır. Metro ve tahmini parçalar gönderilmez.</Text>
+            <Text style={s.dim}>Bitmiş yolculukların GPS noktaları kendi sunucuna ({snap.SNAP_HOST}) gider; sunucu onları Azerbaycan yol haritasına oturtup çizgiyi geri yollar, hiçbir şey saklamaz. Yaya/bisiklette çizgi gerçek izinden en çok ~12 m sapar (yol yakınsa yola oturur, değilse iz olduğu gibi kalır); araçta noktalar yol koridorundaysa çizgi yolun kendisi olur. Metro ve tahmini parçalar gönderilmez.</Text>
             <Text style={[s.dim, { marginTop: 6 }]}>Otobüs durağı listesi: {snap.stopsInfo() ? snap.stopsInfo().n + ' durak (OSM, ' + snap.stopsInfo().v + ')' : 'henüz inmedi'} — aracın durduğu yerler durağa denk geliyorsa otobüs sayılır.</Text>
             <Text style={[s.dim, { marginTop: 6 }]}>Oturan parça: {sst.ok} · oturmayan: {sst.fail} · son soru: {snap.status.at ? fmtClock(snap.status.at) : '—'}{snap.status.err ? ' · hata: ' + snap.status.err : ''}</Text>
             <TouchableOpacity style={[s.btn, { marginTop: 8, alignSelf: 'flex-start' }]} onPress={() => { snap.reset(); onSnapReset(); store.addLog('düğme', 'yeniden oturt'); }}>
@@ -991,25 +995,25 @@ function TripModal({ trip, onClose, onMode }) {
             <View onLayout={(e) => setW(e.nativeEvent.layout.width)}>{w > 0 ? <SpeedChart trip={trip} width={w} pick={pick} onPick={setPick} /> : null}</View>
           </Card>
           <Card title="PARÇALAR">
-            {trip.legs.map((l, i) => (
+            {trip.legs.map((l, i) => { const lm = trip.overridden ? trip.mode : l.mode; return (
               <View key={i} style={{ paddingVertical: 6 }}>
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                  <ModeIcon mode={l.mode} />
-                  <Text style={[s.tx, { flex: 1 }]}>{MODE[l.mode].label}{l.est ? ' (tahmini)' : ''}</Text>
+                  <ModeIcon mode={lm} />
+                  <Text style={[s.tx, { flex: 1 }]}>{MODE[lm].label}{l.est ? ' (tahmini)' : ''}</Text>
                   <Text style={s.num}>{fmtKm(l.dist)}</Text>
                   <Text style={[s.num, { width: 74, textAlign: 'right' }]}>{fmtDur(l.dur)}</Text>
                 </View>
                 <Text style={[s.dim, { marginLeft: 24 }]}>
                   {fmtClock(l.t0)} – {fmtClock(l.t1)} · ort {fmtKmh(l.avg)}
-                  {(l.mode === 'car' || l.mode === 'bus') && l.stops ? ' · ' + l.stops + ' duruş (' + fmtDur(l.stopMs) + ')' : ''}
-                  {(l.mode === 'car' || l.mode === 'bus') && l.slowMs >= 60e3 ? ' · trafikte yavaş ' + fmtDur(l.slowMs) : ''}
-                  {(l.mode === 'car' || l.mode === 'bus') && l.atStops != null && l.stopPts.length ? ' · durakta duruş ' + l.atStops + '/' + l.stopPts.length : ''}
-                  {steps[i] != null ? ' · ' + fmtInt(steps[i]) + ' adım' : ''}{waitTxt(l)}
+                  {(lm === 'car' || lm === 'bus') && l.stops ? ' · ' + l.stops + ' duruş (' + fmtDur(l.stopMs) + ')' : ''}
+                  {(lm === 'car' || lm === 'bus') && l.slowMs >= 60e3 ? ' · trafikte yavaş ' + fmtDur(l.slowMs) : ''}
+                  {(lm === 'car' || lm === 'bus') && l.atStops != null && l.stopPts.length ? ' · durakta duruş ' + l.atStops + '/' + l.stopPts.length : ''}
+                  {steps[i] != null ? ' · ' + fmtInt(steps[i]) + ' adım' : ''}{waitTxt({ ...l, mode: lm })}
                 </Text>
                 {l.gps ? <Text style={[s.dim, { marginLeft: 24, color: l.gps.lvl === 'zayıf' ? C.warn : C.dim }]}>GPS {l.gps.lvl} · ±{l.gps.acc} m · {Math.round(l.gps.gap)} sn’de bir nokta{l.gps.lvl === 'zayıf' ? ' — bu parçanın çizgisi yaklaşık' : ''}{l.snap ? ' · yola oturtuldu' : ''}</Text> : null}
               </View>
-            ))}
-            <Text style={[s.dim, { marginTop: 4 }]}>Tür; telefonun hareket algılayıcısından (yürüyor / araçta) ve hızdan çıkarılır. Otobüs: durak durak gidiş + öncesinde ya da sonrasında yürüyüş. Araçtan inip en az 1 dk yürüme hızında gidersen ayrı yaya parçası olur. Kesikli çizgi: GPS’siz ya da kayıt boşluğu (tahmini); soluk çizgi: GPS zayıf. Beyaz oklar gidiş yönünü gösterir.{trip.legs.some((l) => l.snap) ? ' Yola oturtulmuş parçalar yolu izler (gerçek izden en çok ~12 m); mesafe o çizgiden ölçülür — turuncu iz katmanıyla karşılaştırabilirsin.' : ''}</Text>
+            ); })}
+            <Text style={[s.dim, { marginTop: 4 }]}>Tür; telefonun hareket algılayıcısından (yürüyor / araçta) ve hızdan çıkarılır. Otobüs: durak durak gidiş + öncesinde ya da sonrasında yürüyüş. Araçtan inip en az 1 dk yürüme hızında gidersen ayrı yaya parçası olur. Kesikli çizgi: GPS’siz ya da kayıt boşluğu (tahmini); soluk çizgi: GPS zayıf. Beyaz oklar gidiş yönünü gösterir.{trip.legs.some((l) => l.snap) ? ' Yola oturtulmuş parçalar yolu izler (yayada gerçek izden en çok ~12 m, araçta yolun kendisi); mesafe o çizgiden ölçülür — turuncu iz katmanıyla karşılaştırabilirsin.' : ''}</Text>
           </Card>
           <Card title="TÜR YANLIŞSA DÜZELT">
             <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
@@ -1073,9 +1077,9 @@ export default function App() {
   const [active, setActive] = useState(AppState.currentState !== 'background'); // uygulama ekranda mı
   // Uygulama kilidi: açılışta ve 30 sn'den uzun arka planda kaldıktan sonra Face ID ister
   const [locked, setLocked] = useState(() => pro.lockOn());
-  const bgAt = useRef(0);
+  const bgAt = useRef(0), prevState = useRef(AppState.currentState);
   const [unlocking, setUnlocking] = useState(false);
-  const tryUnlock = async () => { if (unlocking) return; setUnlocking(true); const ok = await pro.unlock(); setUnlocking(false); if (ok) setLocked(false); };
+  const tryUnlock = async () => { if (unlocking) return; setUnlocking(true); const ok = await pro.unlock(); setUnlocking(false); if (ok) { setLocked(false); bgAt.current = 0; } };
   useEffect(() => { if (locked) tryUnlock(); }, [locked]);
   const tried = useRef(new Set()); // adres sorgusu denenmiş yerler (aynı yeri tekrar tekrar sorma)
   const bump = useCallback(() => setRev((r) => r + 1), []);
@@ -1118,16 +1122,26 @@ export default function App() {
   useEffect(() => {
     const sub = AppState.addEventListener('change', (a) => {
       setActive(a !== 'background');
+      // Kilit yalnız gerçek arka plandan (background → active) dönüşte; Kontrol Merkezi / bildirim / Face ID
+      // penceresi inactive → active üretir, bunlar kilitlemez. Kilitleyince bgAt sıfırlanır (bir daha sormasın).
       if (a === 'background') bgAt.current = Date.now();
-      else if (a === 'active' && pro.lockOn() && bgAt.current && Date.now() - bgAt.current > pro.LOCK_GRACE) setLocked(true);
+      else if (a === 'active' && prevState.current === 'background' && pro.lockOn() && bgAt.current && Date.now() - bgAt.current > pro.LOCK_GRACE) { setLocked(true); bgAt.current = 0; }
+      prevState.current = a;
       store.addLog('uygulama', a === 'active' ? 'öne geldi' : a === 'background' ? 'arka plana gitti' : a);
       if (a === 'active') { bump(); tracker.status().then(setTrk); }
     });
     return () => sub.remove();
   }, []);
+  const dayRef = useRef(day), todayRef = useRef(dayStart(Date.now()));
+  dayRef.current = day;
   useEffect(() => {
     if (!active) return;
-    const id = setInterval(() => setTick((x) => x + 1), 4e3);
+    const id = setInterval(() => {
+      setTick((x) => x + 1);
+      // gece yarısı geçti: "Bugün"e bakılıyorsa yeni güne geç (yoksa sabah dünkü gün açık kalır, canlı nokta görünmez)
+      const t = dayStart(Date.now());
+      if (t !== todayRef.current) { if (dayRef.current === todayRef.current) setDay(t); todayRef.current = t; }
+    }, 4e3);
     return () => clearInterval(id);
   }, [active]);
 
@@ -1192,7 +1206,7 @@ export default function App() {
     store.addLog('yer-kaydet', (p.name || '') + ' → ' + (name || '(adsız)') + ' · ' + kind);
     setPlace(null); bump();
   };
-  const onWipe = () => Alert.alert('Tüm veriyi sil', 'Kaydedilmiş bütün konumlar, yerler ve düzeltmeler silinir. Geri alınamaz.', [
+  const onWipe = () => Alert.alert('Tüm veriyi sil', 'Kaydedilmiş bütün konumlar, yerler, düzeltmeler, olay günlüğü, pil ölçümleri ve çevrimdışı karolar silinir; ayarlar (kilit, GPS) kalır. Geri alınamaz.', [
     { text: 'Vazgeç' },
     { text: 'Sil', style: 'destructive', onPress: () => { store.wipeAll(); store.addLog('veri-silindi', 'tüm veri silindi'); store.setKV('rec', trk.running); store.setKV('profile', profile); setHints(null); tried.current.clear(); bump(); } },
   ]);
@@ -1209,7 +1223,7 @@ export default function App() {
       <View style={{ flex: 1 }}>
         {tab === 'harita' ? <HaritaTab data={data} day={day} setDay={goDay} trk={trk} onToggle={onToggle} onPlace={openPlace} onTrip={openTrip} me={me} steps={steps} lastAct={lastAct} /> : null}
         {tab === 'gunluk' ? <GunlukTab data={data} day={day} setDay={goDay} onTrip={openTrip} onPlace={openPlace} steps={steps} /> : null}
-        {tab === 'analiz' ? <AnalizTab trk={trk} hints={hints} rev={rev} onPlace={openPlace} onTrip={openTrip} onSnap={bump} /> : null}
+        {tab === 'analiz' ? <AnalizTab trk={trk} hints={hints} rev={rev} onPlace={openPlace} onTrip={openTrip} onSnap={bump} minute={Math.floor(tick / 15)} /> : null}
         {tab === 'ayarlar' ? <AyarlarTab trk={trk} onToggle={onToggle} profile={profile} setProfile={setProfile} onWipe={onWipe} rev={rev + tick} onSnapReset={bump} /> : null}
       </View>
       <View style={[s.nav, { paddingBottom: BOTTOM }]}>

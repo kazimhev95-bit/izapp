@@ -20,7 +20,7 @@ export const CFG = {
   EST_WALK_V: 1.4,        // m/s — kayıt boşluğunda "yürüdü" varsayımı için hız
   BLIND_MIN_DT: 90e3,     // ms — GPS'siz (kör) araç parçası için en kısa sessizlik
   BLIND_MIN_D: 400,       // m
-  BLIND_MIN_V: 3.3,       // m/s (12 km/s) — kör parçanın araç sayılması için
+  BLIND_MIN_V: 2.0,       // m/s (7 km/s) — kör parçanın araç sayılması için (tıxacda 10 km/s sürünme bölünmesin; yürüyüş 5 km/s)
   BLIND_MAX_DT: 90 * 60e3,// ms — bundan uzun sessizlik "veri yok"tur
   WALK_V: 2.2,            // m/s (8 km/s) — altı yaya hızı
   WALK_ACT_MAX_V: 4.5,    // m/s — hareket işlemcisi "yürüyor/koşuyor" dese de bundan hızlıysa araçtır
@@ -43,6 +43,7 @@ export const CFG = {
   STOP_AVG: 2.5,          // m/s — seyrek noktalarda: uzun parçanın ortalaması bunun altındaysa duruş sayılır
   BUS_MIN_D: 800,         // m — otobüs sayılacak araç parçasının en kısa mesafesi
   PHANTOM_MAX: 15 * 60e3, // ms — aynı yere dönen bundan kısa ve kanıtsız yolculuk hayalettir (GPS sıçraması)
+  PHANTOM_D: 1000,        // m — kaba konumlu (±30 m üstü) hayalet adayı en çok bu kadar uzun olabilir
   BUS_STOPS_KM: 1.0,      // km başına duruş (otobüs durak durak gider); iki uçta yürüyüş varsa BUS_STOPS_KM2 yeter
   BUS_STOPS_KM2: 0.6,
   BUS_TAIL_WAIT: 90e3,    // ms — araçtan hemen önceki yürüyüş en az bu kadar yerinde beklemeyle bitiyorsa: durakta bekleme
@@ -57,6 +58,7 @@ export const CFG = {
   JAM_V: 3.1,             // m/s (11 km/s) — araçta bunun altı "trafikte yavaş" (tıxac süresine sayılır)
   WAIT_R: 15,             // m — yolculuk içinde bu yarıçapta kalınırsa "yerinde bekliyor" (kaba konumda büyür)
   WAIT_MIN: 40e3,         // ms — en kısa bekleme (ışık, durak, yaya bekleme)
+  WAIT_B_MAX: 10 * 60e3,  // ms — "yerinde sayma" beklemesi en çok bu kadar (daha uzunu zaten durak olur)
   WALK_MIN_DT: 60e3,      // ms — araçtan inip yürüme: yürüme hızı en az bu kadar sürmeli…
   WALK_MIN_V: 0.6,        // m/s — …ölçülen hız bunun üstünde (yerinde durmak yürüme değil, beklemedir)…
   WALK_MAX_V: 3.5,        // m/s — …ve bu aralıkta hiç araç hızı ölçülmemiş olmalı (trafikte dur-kalk ≠ yürüyüş)
@@ -435,11 +437,14 @@ function findWaits(p, a, b) {
     while (s0 < e0 && ((s0 > a && vImp(s0 - 1, s0) > 2.5) || vImp(s0, s0 + 1) > 2.5)) s0++;
     while (e0 > s0 && vImp(e0 - 1, e0) > 2.5) e0--;
     const n = e0 - s0 + 1, k = Math.floor(n / 3);
-    if (n >= 3 && p[e0].t - p[s0].t >= CFG.WALK_MIN_DT) {
-      const A = p.slice(s0, s0 + k), C = p.slice(e0 - k + 1, e0 + 1);
+    if (n >= 3 && p[e0].t - p[s0].t >= CFG.WALK_MIN_DT && p[e0].t - p[s0].t <= CFG.WAIT_B_MAX) {
+      const A = p.slice(s0, s0 + k), C = p.slice(e0 - k + 1, e0 + 1), Q = p.slice(s0, e0 + 1);
       const ca = { lat: med(A.map((q) => q.lat)), lon: med(A.map((q) => q.lon)) }, cc = { lat: med(C.map((q) => q.lat)), lon: med(C.map((q) => q.lon)) };
       const dt = (C.reduce((x, q) => x + q.t, 0) / k - A.reduce((x, q) => x + q.t, 0) / k) / 1000;
-      if (hav(ca, cc) / Math.max(1, dt) < 0.25) win.push([s0, e0]);
+      // yayılma: bütün noktalar merkeze yakın kalmalı — gidip aynı yoldan dönen (hızsız) yürüyüşte baş ve son
+      // aynı yerdedir ama aradaki noktalar yüzlerce metre uzaktadır; o bekleme değil yolculuktur.
+      const cm = { lat: med(Q.map((q) => q.lat)), lon: med(Q.map((q) => q.lon)) }, lim = Math.max(80, 2.5 * med(Q.map((q) => q.acc || 0)));
+      if (hav(ca, cc) / Math.max(1, dt) < 0.25 && Q.every((q) => hav(cm, q) <= lim)) win.push([s0, e0]);
     }
     i = j + 1;
   }
@@ -463,7 +468,12 @@ function applyOverride(it, ov) {
   if (ov === it.mode) return;
   const mixed = it.legs.some((l) => l.mode === 'walk') && it.legs.some((l) => l.mode !== 'walk');
   if (mixed && ov !== 'walk' && ov !== 'bike') {
-    for (const l of it.legs) if (l.mode !== 'walk') l.mode = ov;
+    for (const l of it.legs) if (l.mode !== 'walk') {
+      l.autoMode = l.mode; l.mode = ov; // autoMode: yola oturtma anahtarı bununla
+      // metro yer altında gider: araba yol ağına oturmuş çizgi ve yol mesafesi anlamsız → ham ize dön
+      if (ov === 'metro' && l.snap) { l.snap = null; l.dist = l.rawDist != null ? l.rawDist : l.dist; l.avg = l.dist / (l.dur / 1000); }
+    }
+    it.dist = it.legs.reduce((s, l) => s + l.dist, 0); it.avg = it.dist / (it.dur / 1000);
     setTripMode(it);
     return;
   }
@@ -529,15 +539,17 @@ export function segment(points, acts, busNear) {
 function dropPhantoms(items, actAt) {
   const moved = (trip) => {
     for (let t = trip.t0; t <= trip.t1; t += 10e3) { const k = actAt(t); if (k && k !== 'S') return true; }
-    let good = 0;
-    for (const q of trip.pts) if (q.spd != null && q.spd > 1.0 && (q.acc == null || q.acc <= 25)) good++;
-    return good >= 3;
+    let good = 0, fair = 0;
+    for (const q of trip.pts) if (q.spd != null && q.spd > 1.0) { if (q.acc == null || q.acc <= 25) good++; else if (q.acc <= 50) fair++; }
+    return good >= 3 || fair >= 6; // kaba noktada da ölçülmüş hız çoksa gerçek harekettir
   };
   for (let i = 1; i < items.length - 1; i++) {
     const a = items[i - 1], t = items[i], b = items[i + 1];
     if (t.type !== 'trip' || a.type !== 'stay' || b.type !== 'stay') continue;
     // kısa (≤ 15 dk) ise her zaman; daha uzunsa yalnız noktaları kabaysa (Wi-Fi/baz konumu: ortanca ±30 m üstü)
-    const coarse = quantile(t.pts.map((q) => (q.acc == null ? 99 : q.acc)), 0.5) > 30;
+    // kaba yolculuk da ancak kısa (≤ 30 dk) ve küçükse (≤ 1 km) hayalet olabilir — 40 dk / 5 km'lik gerçek bir
+    // gidiş-dönüş, GPS kaba diye silinmez
+    const coarse = quantile(t.pts.map((q) => (q.acc == null ? 99 : q.acc)), 0.5) > 30 && t.dur <= 2 * CFG.PHANTOM_MAX && t.dist <= CFG.PHANTOM_D;
     if ((t.dur > CFG.PHANTOM_MAX && !coarse) || hav(a, b) > CFG.R_PLACE || moved(t)) continue;
     // sil: a ile b tek durak olur
     const w1 = a.t1 - a.t0, w2 = b.t1 - b.t0;
@@ -614,6 +626,7 @@ function buildPlaces(stays, saved, from, to, detect, hints) {
     const a = Math.max(st.t0, from), b = Math.min(st.t1, to);
     if (b <= a) continue;
     const pl = st.place;
+    if (!st.wait) pl.real = true; // en az bir gerçek (bekleme olmayan) durak
     pl.total += b - a; pl.visits++;
     pl.night += overlapDaily(a, b, 0, 6, false);
     const w = overlapDaily(a, b, 10, 17, true);
@@ -639,14 +652,16 @@ function buildPlaces(stays, saved, from, to, detect, hints) {
   let k = 1;
   for (const pl of used) {
     pl.days = pl.daySet.size;
-    if (!pl.name) pl.name = pl.kind === 'home' ? 'Ev' : pl.kind === 'work' ? 'İş' : pl.addr || 'Konum ' + k++;
+    pl.waitOnly = !pl.real && !pl.saved; // yalnız otobüs/metro beklemesi görülen yer: durak
+    if (!pl.name) pl.name = pl.kind === 'home' ? 'Ev' : pl.kind === 'work' ? 'İş' : pl.addr || (pl.waitOnly ? 'Durak ' : 'Konum ') + k++;
   }
   return used;
 }
 
 // ---- 6) Rutinler: önemli yerler arası A→B; çıkış ve varış saat aralıkları ----
 function buildRoutines(items, places) {
-  const sig = new Set(places.filter((pl) => pl.kind === 'home' || pl.kind === 'work' || (pl.visits >= 2 && pl.total >= 30 * 60e3)).slice(0, 8));
+  // Önemli yerler: ev, iş, sık gidilen yerler — otobüs durağı (yalnız bekleme) rutinin ucu olmaz, ara durak sayılır
+  const sig = new Set(places.filter((pl) => !pl.waitOnly && (pl.kind === 'home' || pl.kind === 'work' || (pl.visits >= 2 && pl.total >= 30 * 60e3))).slice(0, 8));
   const journeys = [];
   let last = null, modes = {}, stops = 0, broken = false;
   for (const it of items) {
@@ -710,9 +725,9 @@ export function analyze(rawPoints, opt) {
       if (!r) continue;
       // Sunucunun yol çizgisi gerçek izle birleştirilir: çizgi izden hiçbir yerde birkaç metreden fazla sapmaz.
       l.snap = fuseSnap(it.pts.slice(l.a, l.b + 1), r.parts, l.mode);
-      l.rawDist = l.dist; l.dist = l.snap.d; l.avg = l.dist / (l.dur / 1000); hit = true;
+      l.rawDist = l.dist; l.dist = l.snap.d; l.avg = l.dist / (l.dur / 1000); l.max = Math.max(l.max, l.avg); hit = true;
     }
-    if (hit) { it.dist = it.legs.reduce((s, l) => s + l.dist, 0); it.avg = it.dist / (it.dur / 1000); }
+    if (hit) { it.dist = it.legs.reduce((s, l) => s + l.dist, 0); it.avg = it.dist / (it.dur / 1000); it.max = Math.max(...it.legs.map((l) => l.max)); }
   }
 
   const ovKeys = Object.keys(overrides).map(Number);

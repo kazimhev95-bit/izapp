@@ -7,7 +7,9 @@ const MIN_D = 60;          // m — daha kısa parçayı sormaya değmez
 const SETTLE_MS = 3 * 60e3; // son 3 dk'da biten parça sürüyor olabilir (nokta gelmeye devam eder) → bekle
 
 // Parçanın önbellek anahtarı: sürüm + tür + zaman aralığı + nokta sayısı (parça büyürse değişir)
-export const snapKey = (leg) => SNAP_V + ':' + leg.mode + ':' + leg.t0 + ':' + leg.t1 + ':' + (leg.b - leg.a);
+// Tür: OTOMATİK tür (autoMode) — kullanıcının düzeltmesi anahtarı değiştirmez (analyze'de arama düzeltmeden önce yapılır)
+const modeOf = (leg) => leg.autoMode || leg.mode;
+export const snapKey = (leg) => SNAP_V + ':' + modeOf(leg) + ':' + leg.t0 + ':' + leg.t1 + ':' + (leg.b - leg.a);
 
 // Sunucuya sorulacak parçalar ve gövdeleri. known(k): anahtar önbellekte var mı (varsa bir daha sorulmaz).
 // Nokta biçimi: [lat, lon, t (sn), acc (m)] — yapay çıkış noktaları (motorun tahmini) gönderilmez.
@@ -16,7 +18,7 @@ export function snapCandidates(items, now, known) {
   for (const it of items) {
     if (it.type !== 'trip' || !it.raw) continue;
     for (const leg of it.legs) {
-      if (!SNAP_MODES[leg.mode] || leg.est || leg.dist < MIN_D || now - leg.t1 < SETTLE_MS) continue;
+      if (!SNAP_MODES[modeOf(leg)] || leg.est || leg.dist < MIN_D || now - leg.t1 < SETTLE_MS) continue;
       const k = snapKey(leg);
       if (known(k)) continue;
       const p = [];
@@ -24,7 +26,7 @@ export function snapCandidates(items, now, known) {
         const q = it.raw[i];
         if (q && !q.syn) p.push([+q.lat.toFixed(6), +q.lon.toFixed(6), Math.round(q.t / 100) / 10, q.acc == null ? null : Math.round(q.acc)]);
       }
-      if (p.length >= 3) out.push({ k, leg: { id: k, m: leg.mode, p } });
+      if (p.length >= 3) out.push({ k, leg: { id: k, m: modeOf(leg), p } });
     }
   }
   return out;

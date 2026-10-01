@@ -2,13 +2,13 @@
 // harita sayfası karoyu önce buradan ister, yoksa ağdan yükler. Şehir dışında / metroda / internetsizken
 // harita yine açılır. Zoom 11-16: şehir görünümünden sokak görünümüne; 17+ ağdan (çok büyür).
 // Karo sunucusu OSM'nin genel sunucusu — kibar davran: aynı anda 2 istek, istek başına ~100 ms ara.
-import { getKV, setKV, addLog, hasTiles, putTiles, tileStats, clearTiles } from './store';
+import { addLog, hasTiles, putTiles, tileStats, clearTiles } from './store';
 
 export const ZOOMS = [11, 12, 13, 14, 15, 16];
 export const PAD = 0.004;   // ° — yolculuk kutusunun etrafına pay (~400 m)
 export const MAX_TILES = 6000; // güvenlik: bir seferde en çok bu kadar karo (≈ 60-90 MB)
-export const offlineOn = () => getKV('offline', false);
-export function setOffline(on) { setKV('offline', !!on); addLog('ayar', 'çevrimdışı harita: ' + (on ? 'açık' : 'kapalı')); }
+// İndirilmiş karo varsa her zaman kullanılır (ayrı bir anahtar yok: indirdiysen kullanmak istiyorsundur)
+export const offlineOn = () => true;
 
 // enlem/boylam → karo numarası
 function tileOf(lat, lon, z) {
@@ -36,6 +36,18 @@ export function keysOf(boxes) {
   return [...keys];
 }
 
+// base64: Hermes'in btoa'sı (RN 0.73+); yoksa elle (tek yere bağlı kalmasın)
+const B64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+function toB64(buf) {
+  if (typeof btoa === 'function') { let s = ''; for (let i = 0; i < buf.length; i += 8192) s += String.fromCharCode.apply(null, buf.subarray(i, i + 8192)); return btoa(s); }
+  let o = '';
+  for (let i = 0; i < buf.length; i += 3) {
+    const a = buf[i], b = i + 1 < buf.length ? buf[i + 1] : 0, c = i + 2 < buf.length ? buf[i + 2] : 0, n = (a << 16) | (b << 8) | c;
+    o += B64[n >> 18] + B64[(n >> 12) & 63] + (i + 1 < buf.length ? B64[(n >> 6) & 63] : '=') + (i + 2 < buf.length ? B64[n & 63] : '=');
+  }
+  return o;
+}
+
 // İndirme: eksik karoları çeker. onProgress(done, total). Dönüş: {total, got, fail}
 let busy = false;
 export const downloading = () => busy;
@@ -51,9 +63,7 @@ export async function download(points, onProgress) {
       try {
         const res = await fetch('https://tile.openstreetmap.org/' + k + '.png', { headers: { 'User-Agent': 'IZ-konum-gunlugu/1.0 (kisisel, cevrimdisi onbellek)' } });
         if (!res.ok) throw new Error(String(res.status));
-        const buf = new Uint8Array(await res.arrayBuffer());
-        let s = ''; for (let i = 0; i < buf.length; i += 8192) s += String.fromCharCode.apply(null, buf.subarray(i, i + 8192));
-        batch.push([k, btoa(s)]);
+        batch.push([k, toB64(new Uint8Array(await res.arrayBuffer()))]);
       } catch (e) { fail++; }
       done++;
       if (batch.length >= 20) { putTiles(batch); batch = []; }

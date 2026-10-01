@@ -283,5 +283,40 @@ ok(pzTrip && pzTrip.legs.length === 1 && pzTrip.legs[0].waits.length === 1, 'bek
   ok(G.pts.some((q) => q.via && q.via.some((v) => Math.abs(v[0] - 40.4) < 1e-6 && Math.abs(v[1] - (49.85 + 300 / D)) < 1e-6)), 'seyrek noktada yolun köşesi eklendi (köşe kesilmedi)');
 }
 
+// ---- 1 Eki mantık taraması: motor bulguları (gerileme testleri) ----
+{
+  const legsOf2 = (X) => X.items.map((i) => (i.type === 'trip' ? i.legs.map((l) => l.mode).join('+') : i.type === 'stay' ? 'stay' : i.type)).join(' | ');
+  // A) hızsız (Wi-Fi/baz) gidiş-dönüş yürüyüşü "bekleme" sanılıp yok olmamalı
+  const P = []; let t = 0; const add = (x, acc) => { P.push({ t, lat: 40.4, lon: 49.85 + x / 85000, acc, spd: null }); t += 10e3; };
+  for (let i = 0; i <= 20; i++) add(0, 10); t += 60e3 * 8; for (let x = 0; x <= 1200; x += 14) add(x, 15); for (let i = 0; i < 12; i++) add(1200, 15); for (let x = 1200; x >= 0; x -= 14) add(x, 15); for (let i = 0; i <= 60; i++) add(0, 10);
+  const A = analyze(P, { from: 0, to: 3 * 3600e3 });
+  ok(A.totals.trips === 1 && A.totals.dist > 2000, 'hızsız gidiş-dönüş yürüyüşü korunuyor: ' + legsOf2(A) + ' ' + Math.round(A.totals.dist) + ' m');
+  // B) kaba konumlu (±35 m) 41 dk / 5,7 km gidiş-dönüş hayalet değildir
+  const Q = []; t = 0; for (let i = 0; i <= 60; i++) { Q.push({ t, lat: 40.4, lon: 49.85, acc: 10, spd: 0 }); t += 30e3; }
+  for (let i = 0; i < 120; i++) { Q.push({ t, lat: 40.4, lon: 49.85 + (i * 25) / 85000, acc: 35, spd: 2.5 }); t += 10e3; }
+  for (let i = 120; i > 0; i--) { Q.push({ t, lat: 40.4, lon: 49.85 + (i * 25) / 85000, acc: 35, spd: 2.5 }); t += 10e3; }
+  for (let i = 0; i <= 60; i++) { Q.push({ t, lat: 40.4, lon: 49.85, acc: 10, spd: 0 }); t += 30e3; }
+  const B = analyze(Q, { from: 0, to: 5 * 3600e3 });
+  ok(B.totals.trips === 1 && B.totals.dist > 5000, 'kaba konumlu uzun gidiş-dönüş silinmiyor: ' + Math.round(B.totals.dist) + ' m');
+  // C) her sabah ev → yürü → durakta bekle → otobüs → iş: rutin Ev→İş olmalı, durak yer değil ara durak
+  const S = []; const day0 = dayStart(new Date(2026, 8, 21).getTime());
+  for (let d = 0; d < 5; d++) { let tt = day0 + d * 86400e3 + 7 * 3600e3, x = 0; const pt = (spd) => S.push({ t: tt, lat: 40.4, lon: 49.85 + x / 85000, acc: 8, spd });
+    for (let i = 0; i < 30; i++) { pt(0); tt += 60e3; } for (let i = 0; i < 180; i++) { x += 1.4; pt(1.4); tt += 1000; } for (let i = 0; i < 48; i++) { pt(0); tt += 10e3; }
+    for (let h = 0; h < 10; h++) { for (let i = 0; i < 30; i++) { x += 10; pt(10); tt += 1000; } for (let i = 0; i < 20; i++) { pt(0); tt += 1000; } }
+    for (let i = 0; i < 110; i++) { x += 1.4; pt(1.4); tt += 1000; } for (let i = 0; i < 8 * 60; i++) { pt(0); tt += 60e3; }
+    let tn = day0 + d * 86400e3 + 3600e3; for (let i = 0; i < 30; i++) { S.push({ t: tn, lat: 40.4, lon: 49.85, acc: 8, spd: 0 }); tn += 10 * 60e3; } }
+  S.sort((a, b) => a.t - b.t);
+  const Cc = analyze(S, { from: day0, to: day0 + 5 * 86400e3, detect: true });
+  const r = Cc.routines.find((x) => x.from.kind === 'home' && x.to.kind === 'work');
+  ok(!!r && r.count === 5 && r.mode === 'bus', 'durakta bekleme rutini bölmüyor, Ev→İş 5x otobüs: ' + Cc.routines.map((x) => x.from.name + '→' + x.to.name).join(', '));
+  ok(Cc.places.some((p) => p.waitOnly), 'yalnız beklenen yer "Durak" olarak işaretli');
+  // F) tıxacda 6 dk GPS boşluğu (10 km/s) yolculuğu ikiye bölmez
+  const G = []; t = 0; let x = 0; const pt = () => G.push({ t, lat: 40.4, lon: 49.85 + x / 85000, acc: 6, spd: 12 });
+  for (let i = 0; i < 30; i++) { G.push({ t, lat: 40.4, lon: 49.85, acc: 6, spd: 0 }); t += 20e3; } for (let i = 0; i < 180; i++) { x += 12; pt(); t += 1000; } t += 360e3; x += 1000; for (let i = 0; i < 180; i++) { x += 12; pt(); t += 1000; }
+  for (let i = 0; i < 30; i++) { G.push({ t, lat: 40.4, lon: 49.85 + x / 85000, acc: 6, spd: 0 }); t += 20e3; }
+  const F = analyze(G, { from: 0, to: 3 * 3600e3 });
+  ok(F.totals.trips === 1 && !F.items.some((i) => i.type === 'gap') && F.totals.dist > 5000, 'tıxac boşluğu yolculuğu bölmüyor: ' + legsOf2(F) + ' ' + Math.round(F.totals.dist) + ' m');
+}
+
 console.log(fail ? `\n${fail} HATA` : '\nTÜMÜ GEÇTİ');
 process.exit(fail ? 1 : 0);
