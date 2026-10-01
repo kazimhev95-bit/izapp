@@ -2,7 +2,9 @@
 //   iz-osrm-foot / iz-osrm-car — OSRM 5.27.1 yol eşleştirme motorları (yalnız sunucu içinden erişilir)
 //   iz-harita                  — telefonun konuştuğu servis (server.js); nginx arkasında
 // --mmap: yol ağı belleğe kopyalanmaz, diskten eşlenir (aynı sunucudaki CRM vb. için bellek kalsın).
-const OSRM = (port, dir) => '--algorithm mld --ip 127.0.0.1 --port ' + port + ' --max-matching-size 1000 --threads 2 --mmap 1 data/' + dir + '/az.osrm';
+// --verbosity ERROR: OSRM varsayılan INFO seviyesinde her isteğin adresini (KOORDİNATLAR dahil) stdout'a yazar, pm2 de
+// bunu dosyaya alır — konum verisi sunucuda birikirdi (1 Eki'de fark edildi, günlükler silindi). Yalnız hata yazılır.
+const OSRM = (port, dir) => '--algorithm mld --ip 127.0.0.1 --port ' + port + ' --max-matching-size 1000 --threads 2 --mmap 1 --verbosity ERROR data/' + dir + '/az.osrm';
 
 module.exports = {
   apps: [
