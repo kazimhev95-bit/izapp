@@ -1207,7 +1207,8 @@ const s = StyleSheet.create({
   tlTitle: { color: C.text, fontSize: 14, fontWeight: '600' },
   tlRight: { paddingTop: 8, paddingLeft: 6 },
   // Harita katmanları
-  layerPanel: { backgroundColor: C.panel, borderWidth: 1, borderColor: C.line, borderRadius: 10, padding: 8, gap: 6, alignSelf: 'flex-end' },
+  // katman kutusu: düğme sütununun altında, sağ kenara yaslı, sola doğru açılır (akışa girmez — satırı itip ekrandan taşırmasın)
+  layerPanel: { position: 'absolute', right: 0, top: 104, width: 196, backgroundColor: C.panel, borderWidth: 1, borderColor: C.line, borderRadius: 10, padding: 10, gap: 8 },
   layerRow: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingVertical: 2 },
   layerSw: { width: 14, height: 4, borderRadius: 2 },
   layerBar: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, paddingHorizontal: 14, paddingVertical: 8 },
