@@ -126,6 +126,14 @@ async function setPower(p, why) {
   try { if (await taskStarted()) await Location.startLocationUpdatesAsync(TASK, taskOptions(p)); } catch (e) { note('d_startErr', 'güç: ' + errText(e)); }
 }
 let lastLocAt = 0; // iOS'tan en son konum gelen an (cihaz saati)
+// Algılayıcı "hareket" deyince GPS'i aç ve durgunluk ölçümünü SIFIRDAN başlat. Eskiden yalnız güç değişiyordu; çapa,
+// durgunluk başlangıcı ve son konum anı eski duraktan kaldığı için bir sonraki kaba (hızsız) konum ya da 5 sn'lik
+// kalp atışı GPS'i 2-5 sn içinde yeniden kısıyordu (gerçek kayıt 1 Eki 16:31-16:34: 5 kez aç-kapa, yürüyüşün ilk
+// 2,5 dk'sı kaba konumla). Konumla uyanış (adapt 'kıpırdadı') zaten böyle sıfırlıyordu.
+function wake(p, why) {
+  anchor = null; stillSince = Date.now(); lastLocAt = Date.now(); actStillSince = 0;
+  setPower(p, why);
+}
 function adapt(locations) {
   lastLocAt = Date.now();
   if (!smartOn()) { if (power === 'low') setPower('high'); return; }
@@ -250,7 +258,7 @@ function onActivity(a) {
   if (c < 1) { k = 'U'; if (!lastSaved || lastSaved.c < 1) { lastAct = null; return; } }
   if (lastSaved && lastSaved.k === k && lastSaved.c === c) { // değişmedi
     lastAct = c >= 1 ? { k, c } : null;
-    if (c >= 1 && k === 'A' && power === 'low' && navOn()) setPower('nav', 'algılayıcı: araçta'); // ışıkta kısıldıysa kalkışta geri aç
+    if (c >= 1 && k === 'A' && power === 'low' && navOn()) wake('nav', 'algılayıcı: araçta'); // ışıkta kısıldıysa kalkışta geri aç
     return;
   }
   lastSaved = { k, c };
@@ -259,8 +267,8 @@ function onActivity(a) {
   // hemen açılır); "duruyor" başlangıcı not edilir (kalp atışı 2 dk sürünce GPS'i kısar).
   if (c >= 1) {
     if (k === 'S') { if (!actStillSince) actStillSince = Date.now(); } else actStillSince = 0;
-    if (k === 'A' && navOn()) { if (power !== 'nav') setPower('nav', 'algılayıcı: araçta'); }
-    else if ((k === 'W' || k === 'R' || k === 'C' || (k === 'A' && power === 'low')) && power !== 'high') setPower('high', 'algılayıcı: ' + ({ W: 'yürüyor', R: 'koşuyor', C: 'bisiklet', A: 'araçta' }[k]));
+    if (k === 'A' && navOn()) { if (power !== 'nav') wake('nav', 'algılayıcı: araçta'); }
+    else if ((k === 'W' || k === 'R' || k === 'C' || (k === 'A' && power === 'low')) && power !== 'high') wake('high', 'algılayıcı: ' + ({ W: 'yürüyor', R: 'koşuyor', C: 'bisiklet', A: 'araçta' }[k]));
   }
   try { insertActivity(Math.round(a.timestamp || Date.now()), k, c); count('act'); } catch (e) { /* yoksay */ }
 }

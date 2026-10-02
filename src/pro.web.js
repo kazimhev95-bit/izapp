@@ -1,7 +1,7 @@
 // Web önizlemesi: kilit / pil / barometre gerçek değil — arayüzü görmek için sahte değerler.
 import { getKV, setKV, addLog, insertBattery, getBattery } from './store';
 
-export const LOCK_GRACE = 30e3;
+export { LOCK_GRACE } from './lockrule';
 export const lockOn = () => getKV('lock', false);
 export function setLock(on) { setKV('lock', !!on); addLog('ayar', 'uygulama kilidi: ' + (on ? 'açık' : 'kapalı')); }
 export async function lockAvailable() { return true; }

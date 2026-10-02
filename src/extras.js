@@ -8,7 +8,8 @@ import { getPoints, getActivity, getStats, getKV, getLogs, getBattery } from './
 // [a, b] (ms) aralığında atılan adım. iPhone son 7 günü saklar; izin yoksa / eski tarihse null döner.
 export async function stepsBetween(a, b) {
   try {
-    if (b <= a || !(await Pedometer.isAvailableAsync())) return null;
+    // iPhone adımları yalnız son 7 gün saklar; daha eskisinde HATA değil 0 döner ("o gün yürünmemiş" gibi görünüyordu)
+    if (b <= a || a < Date.now() - 7 * 86400e3 || !(await Pedometer.isAvailableAsync())) return null;
     // İzin henüz verilmediyse SORMA (izin penceresi kayıt başlatılırken açılır); sessizce boş dön.
     if (!(await Pedometer.getPermissionsAsync()).granted) return null;
     const r = await Pedometer.getStepCountAsync(new Date(a), new Date(b));

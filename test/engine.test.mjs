@@ -1,5 +1,5 @@
 // Motor testi: sentetik 14 günlük veride beklenen sonuçlar çıkıyor mu?  ->  node test/engine.test.mjs
-import { analyze, dayStart, addDays, hav } from '../src/engine.js';
+import { analyze, dayStart, addDays, hav, compareRoutes, routeGap } from '../src/engine.js';
 import { demoData } from '../src/demo.js';
 
 let fail = 0;
@@ -392,6 +392,45 @@ ok(pzTrip && pzTrip.legs.length === 1 && pzTrip.legs[0].waits.length === 1, 'bek
   const cb2 = drive([[450, 9], [150, 0], [420, 5]]);
   const Cb2 = analyze([...cb2.pts, ...stayAt(cb2.end + 20e3, 450 * 9 + 420 * 5, 8)], { ...P0, acts: actsOf([[0, 450, 'A'], [450, 600, 'S'], [600, 750, 'C'], [780, 1020, 'C']]) });
   ok(legsOf(Cb2) === 'car+bike', 'araba → park → bisiklet: bisiklette algılayıcı sussa da araba parçası çıkmıyor: ' + legsOf(Cb2));
+}
+
+// ---- Güzergâh karşılaştırma (compareRoutes): Ev → İş hangi yollardan, ne kadar sürede ----
+// 7 iş günü: 4 gün A yolu (düz doğu, 1,5 km) yürüyerek, 2 gün B yolu (300 m kuzeyden dolaşma) yürüyerek, 1 gün A yolu
+// arabayla. Çıkış saatleri 07:50–08:40 arası; geç çıkılan günler daha yavaş (kalabalık). Beklenen: 3 seçenek.
+{
+  const D0 = dayStart(new Date(2026, 8, 7).getTime()), Pts = [];
+  const at = (x, y) => ({ lat: 40.4 + y / 111320, lon: 49.85 + x / 84800 });
+  const stay = (t0, t1, x, y) => { for (let t = t0; t <= t1; t += 60e3) Pts.push({ t, ...at(x, y), acc: 8, spd: 0 }); };
+  // yol: [x, y] köşeleri; v m/s; her saniye bir nokta
+  const go = (t0, corners, v) => {
+    let t = t0;
+    for (let i = 1; i < corners.length; i++) {
+      const [x0, y0] = corners[i - 1], [x1, y1] = corners[i], L = Math.hypot(x1 - x0, y1 - y0);
+      for (let s = v; s < L; s += v) { t += 1000; Pts.push({ t, ...at(x0 + ((x1 - x0) * s) / L, y0 + ((y1 - y0) * s) / L), acc: 6, spd: v }); }
+    }
+    return t;
+  };
+  const A = [[0, 0], [1500, 0]], B = [[0, 0], [0, 300], [1500, 300], [1500, 0]];
+  const plan = [['A', 1.4, 470], ['B', 1.4, 480], ['A', 1.25, 510], ['B', 1.3, 520], ['A', 1.4, 475], ['C', 9, 500], ['A', 1.25, 515]]; // [yol, hız, çıkış dk] — A 4×: erken çıkış hızlı, geç yavaş
+  plan.forEach(([r, v, dm], d) => {
+    const day = D0 + d * 86400e3, dep = day + dm * 60e3;
+    stay(day + 6 * 3600e3, dep, 0, 0);
+    const arr = go(dep, r === 'B' ? B : A, v);
+    stay(arr + 60e3, day + 17 * 3600e3, 1500, 0);
+  });
+  const R = analyze(Pts, { from: D0, to: D0 + 7 * 86400e3, detect: true });
+  const rt = R.routines.find((x) => x.count >= 6);
+  const C = rt ? compareRoutes(rt.list, R.items) : { alts: [] };
+  const sig = C.alts.map((a) => a.mode + ':' + a.n).join(' ');
+  ok(C.alts.length === 3, 'Ev → İş 3 farklı seçenek (2 yol × tür): ' + sig + ' · ' + (rt ? rt.count : 0) + ' sefer');
+  const walkA = C.alts.find((a) => a.mode === 'walk' && a.n === 4), walkB = C.alts.find((a) => a.mode === 'walk' && a.n === 2), car = C.alts.find((a) => a.mode !== 'walk');
+  ok(!!walkA && !!walkB && !!car, 'A yolu yürüyüş 4×, B yolu yürüyüş 2×, araba 1×');
+  ok(walkB && walkA && walkB.dist - walkA.dist > 450 && walkB.dist - walkA.dist < 750, 'B yolu ~600 m daha uzun: ' + (walkB && walkA ? Math.round(walkB.dist - walkA.dist) : '?') + ' m');
+  ok(C.fastest >= 0 && C.alts[C.fastest] === car, 'en hızlı seçenek araba');
+  ok(C.dep && C.dep.late > C.dep.early, 'çıkış saati etkisi (aynı yolda): geç çıkınca daha uzun (' + (C.dep ? Math.round(C.dep.early / 60e3) + ' → ' + Math.round(C.dep.late / 60e3) + ' dk' : '-') + ')');
+  // aynı yolun kendisiyle farkı küçük, paralel yolla farkı büyük (GPS oynaması aynı yolu bölmemeli)
+  const shapeA = walkA.list[0].shape, shapeA2 = walkA.list[1].shape, shapeB = walkB.list[0].shape;
+  ok(routeGap(shapeA, shapeA2) < 30 && routeGap(shapeA, shapeB) > 150, 'iz farkı: aynı yol ' + Math.round(routeGap(shapeA, shapeA2)) + ' m, farklı yol ' + Math.round(routeGap(shapeA, shapeB)) + ' m');
 }
 
 console.log(fail ? `\n${fail} HATA` : '\nTÜMÜ GEÇTİ');

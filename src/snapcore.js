@@ -89,6 +89,14 @@ function fullRoad(pts, parts, X, back) {
     if (acc <= 60) { n++; if (b.d <= Math.min(100, Math.max(40, 1.5 * acc))) agree++; }
   }
   if (!n || agree / n < 0.7) return null;
+  // Uçta yolun DIŞINDA kalan kuyruk: sunucunun yolu caddede bitmiş ama iz site içi / otopark yolunda sürüyor (OSM'de
+  // olmayan ya da özel yol). Bu noktalar yolun ucuna yığılır: çizgi hedefe varmaz, mesafe kaybolur (tarama: 1,72 km
+  // → 1,49 km). Böyle bir kuyruk varsa "tam yol" kullanılmaz; genel birleştirmeye düşülür (iz korunur).
+  const Ltot = s[s.length - 1], off = (i) => P[i].b.d > Math.min(100, Math.max(40, 1.5 * (pts[i].acc || 20)));
+  let head = 0, tail = 0;
+  for (let i = 0; i < P.length && P[i].b.s <= 1 && off(i); i++) head++;
+  for (let i = P.length - 1; i >= 0 && P[i].b.s >= Ltot - 1 && off(i); i--) tail++;
+  if (head >= 2 || tail >= 2) return null;
   const out = [];
   let d = 0, prev = null;
   for (const p of P) {

@@ -73,6 +73,8 @@ export const CFG = {
   VEH_MS: 5000,           // ms — en az bu kadar, ≥ 3 ardışık noktada (aralarında ≤ 5 sn)
   VEH_ACC: 30,            // m — yalnız bu doğrulukta noktaların hızı sayılır
   VEH_MIN_D: 150,         // m — fizik kanıtıyla araç sayılacak hareketin en kısa boyu (otobüse koşan birkaç saniyelik depar araç olmasın)
+  ROUTE_N: 40,            // güzergâh karşılaştırma: her seferin izi yol boyunca bu kadar eşit aralıklı noktaya örneklenir
+  ROUTE_R: 120,           // m — iki seferin izleri ortalama bundan yakınsa aynı güzergâh (GPS oynaması ~10-30 m; paralel sokak 100+ m)
   BIKE_MAX_V: 10,         // m/s (36 km/s) — algılayıcı "bisiklet" dese de HAREKETLİ sürenin çoğu bunun üstündeyse araçtır
                           // (1 Eki: otobüste "bisiklet"). Tek yokuş inişi yetmez — bütün sürüş "araba" oluyordu.
 };
@@ -117,16 +119,20 @@ export function clean(raw) {
     if (q) {
       const dt = (p.t - q.t) / 1000;
       if (dt < 1) continue;
-      if (hav(q, p) / dt > CFG.MAX_V) continue;
+      // Hız testi yalnız kısa aralıkta (GPS sıçraması). Uzun sessizlikten sonraki hızlı yer değiştirme (uçak) gerçektir:
+      // eskiden çapa eski noktada kalıp varış yerindeki saatlerce veri atılıyordu (tarama, 1 Eki).
+      if (dt < 60 && hav(q, p) / dt > CFG.MAX_V) continue;
     }
     out.push(p);
   }
   // Tek noktalık sıçrama: p1 hem öncekinden hem sonrakinden çok uzak, ama önceki ile sonraki yan yana →
   // telefon yerinde dururken Wi-Fi/baz konumu bir anlığına yüzlerce metre öteyi göstermiş. p1 atılır.
+  // Pencere: sıçramadan sonraki nokta 5 dk içinde ve a…b en çok 15 dk (dururken telefon 5 dk'da bir "yaşıyor"
+  // noktası yazar — eski "a…b < 5 dk" şartı onun çevresinde hiç sağlanmıyor, evde sahte "Araba 400 m" çıkıyordu).
   const res = [];
   for (let i = 0; i < out.length; i++) {
     const a = res[res.length - 1], p = out[i], b = out[i + 1];
-    if (a && b && b.t - a.t < 5 * 60e3) {
+    if (a && b && b.t - p.t < 5 * 60e3 && b.t - a.t < 15 * 60e3) {
       const tol = Math.max(50, 2 * (p.acc || 0)), dab = hav(a, b);
       if (hav(a, p) > tol && hav(p, b) > tol && dab < 0.3 * Math.min(hav(a, p), hav(p, b))) continue;
     }
@@ -267,7 +273,9 @@ function makeTrip(p, a, b, actAt) {
 
   // Sınıf: B=kör, S=yaya, K=bisiklet, F=hızlı/araç. Hareket işlemcisi ne diyorsa o; demiyorsa hıza bak.
   const cls = (s) => {
-    if (s.kind === 'blind') return 'B';
+    // GPS'siz (kör) parça: algılayıcı emin biçimde bisiklet / yürüyüş / koşu diyorsa ona uyulur — bisiklette ya da
+    // koşuda köprü altında 2-3 dk GPS kesilince araya sahte "Araba/Metro" giriyordu (tarama). Yoksa araç/metro adayı.
+    if (s.kind === 'blind') return s.act === 'C' ? 'K' : s.act === 'W' || s.act === 'R' ? 'S' : 'B';
     if (s.act === 'A') return 'F';
     if (s.act === 'C') return 'K';
     if ((s.act === 'W' || s.act === 'R') && s.ws <= CFG.WALK_ACT_MAX_V) return 'S';
@@ -322,20 +330,37 @@ function makeTrip(p, a, b, actAt) {
     const med = quantile(sp, 0.5);
     return med >= CFG.WALK_MIN_V && med < CFG.WALK_V && sp.filter((v) => v >= CFG.WALK_MAX_V).length < 2; // tek sıçrama affedilir
   };
-  // 1) iki hızlı koşu arasındaki kısa ve yerinde yavaşlık = duruş (ışık, durak, sıkışık trafik) → araç.
-  //    Böylece dur-kalk giden aracın kısa hamleleri tek bir uzun araç koşusunda birleşir.
-  runs.forEach((r, i) => {
-    const L = runs[i - 1], R = runs[i + 1];
-    if (r.c === 'S' && veh(L) && veh(R) && !walked(r) && r.dt < CFG.WAIT_MAX && (r.d < CFG.STOP_D || r.d / (r.dt / 1000) < 0.55)) r.c = L.d >= R.d ? L.c : R.c;
-  });
-  coalesce('c');
-  // 2) sağlam olmayan hızlı koşular (GPS sıçraması, koşarak karşıya geçme) yayadır. Sağlam = ya uzun
-  //    sürmüş ve gerçekten hızlı (ortalaması ya da tepe hızı yürüyüşün üstünde), ya da insanın
-  //    yürüyerek gidemeyeceği hızla en az SOLID_D metre.
+  // Sağlam araç koşusu = ya uzun sürmüş ve gerçekten hızlı (ortalaması ya da tepe hızı yürüyüşün üstünde), ya da
+  // insanın yürüyerek gidemeyeceği hızla en az SOLID_D metre.
   const solid = (r) => {
     const avg = r.d / (r.dt / 1000);
     return (r.dt >= CFG.SHORT_RUN && (avg >= CFG.WALK_V || p90(r) >= CFG.SOLID_P90)) || (r.d >= CFG.SOLID_D && avg >= CFG.SOLID_V);
   };
+  // 1) iki hızlı koşu arasındaki kısa ve yerinde yavaşlık = duruş (ışık, durak, sıkışık trafik) → araç.
+  //    Böylece dur-kalk giden aracın kısa hamleleri tek bir uzun araç koşusunda birleşir.
+  //    Ama öndeki "hızlı" koşu kendi başına sağlam değilse ve gerçek bir YÜRÜYÜŞÜN hemen ardındaysa (yürürken otobüse
+  //    yetişmek için 6-8 sn hızlanmak) o araç sayılmaz: yoksa durakta 2 dk bekleme otobüse katılıp biniş 2 dk erkene
+  //    kayıyordu (tarama). Yürüyüş yerinde beklemeyle bitiyorsa (≥ WAIT_MIN) o kısa hamle otobüsün duraktan kalkışıdır
+  //    (1 Eki 19:19: bekle → otobüs 30 m sürünür → ışıkta 1 dk) — araçtır.
+  // sondaki yerinde bekleme süresi; en sondaki ≤ 30 sn'lik hareket (aracın ilk sürünmesi yaya koşusunda kalmış olabilir;
+  // Dengeli profilde tek aralık 19 sn — 1 Eki 19:18:43→19:19:02) atlanır
+  const stillTail = (x) => {
+    let t = 0, mv = 0;
+    for (let k = x.b; k >= x.a; k--) {
+      const s = segs[k];
+      if (s.kind === 'move' && s.d / (s.dt / 1000) < 0.4) t += s.dt;
+      else if (!t && (mv += s.dt) <= 30e3) continue;
+      else break;
+    }
+    return t;
+  };
+  const hurry = (x, prev) => !solid(x) && prev && prev.c === 'S' && walked(prev) && stillTail(prev) < CFG.WAIT_MIN;
+  runs.forEach((r, i) => {
+    const L = runs[i - 1], R = runs[i + 1];
+    if (r.c === 'S' && veh(L) && veh(R) && !hurry(L, runs[i - 2]) && !walked(r) && r.dt < CFG.WAIT_MAX && (r.d < CFG.STOP_D || r.d / (r.dt / 1000) < 0.55)) r.c = L.d >= R.d ? L.c : R.c;
+  });
+  coalesce('c');
+  // 2) sağlam olmayan hızlı koşular (GPS sıçraması, koşarak karşıya geçme) yayadır (solid: yukarıda).
   //    Sağlamlık koşu koşu değil BLOK blok ölçülür: art arda gelen araç/bisiklet koşuları (F/K; aradaki duruşlar
   //    1. adımda katıldı) tek harekettir. 1 Eki 19:19: otobüs duraktan kalkıp ışıkta 1 dk durdu, algılayıcı arada
   //    "bisiklet" dedi → hamleler F,K,F,K… diye bölündü, her biri 200 m'nin altında kaldığı için tek tek "sağlam değil"
@@ -357,7 +382,11 @@ function makeTrip(p, a, b, actAt) {
     // Fizik kanıtı (yaya bu hızı tutamaz) yalnız ARAÇ çoğunluklu blokta: bisiklet de 29 km/s'ye çıkar; "bisiklet" denen kısa
     // bloğu bununla kurtarmak, trafikte sürünen otobüsün kalkış hamlesini ayrı bir "bisiklet" parçası yapıyordu (kırma sınaması).
     const fast = maj === 'F' && whole.d >= CFG.VEH_MIN_D && fastFor(whole.a, whole.b, CFG.VEH_V) >= CFG.VEH_MS;
-    if (!blk.some(solid) && !solid(whole) && !fast) blk.forEach((r) => { r.c = 'S'; });
+    // Kısa bisiklet: algılayıcı "bisiklet" dediyse (bisiklet bloğu), ≥ 1 dk ve ortalama ≥ 3 m/s (11 km/s — yürüyüş
+    // değil) yeter; 2 dk'dan kısa sürüş 13 km/s "yürüyüş" görünüyordu (tarama). Sürünen otobüsün kalkış hamlesi
+    // (~2 m/s) bu eşiğin altında kalır.
+    const bikeOk = bikeBlk && whole.dt >= CFG.WALK_MIN_DT && whole.d / (whole.dt / 1000) >= 3;
+    if (!blk.some(solid) && !solid(whole) && !fast && !bikeOk) blk.forEach((r) => { r.c = 'S'; });
     else {
       // Bisiklet bloğunda algılayıcının sessiz kaldığı hızlı anlar (F) — uzun da olsa — bisiklettir: yoksa "araba" sayılıp
       // sürüş bisiklet/araba/bisiklet… diye parçalanıyordu. Araç bloğunda "bisiklet" koşusu ancak kendi başına uzun
@@ -409,14 +438,19 @@ function makeTrip(p, a, b, actAt) {
       r.mode = known > r.dt * 0.3 && auto >= known * 0.5 ? 'car' : bikeLike ? 'bike' : 'car';
     }
   }
-  // Kör parça arabayla komşuysa: tünel mi, yer üstüne çıkan metro mu? Mesafe oranına bak.
+  // Kör parça arabayla komşuysa: tünel mi, yer üstüne çıkan metro mu? Mesafe oranına bak. İKİ GEÇİŞ: kararlar önce
+  // ilk türlerle toplanır, sonra uygulanır — tek geçişte sonuç parça sırasına bağlıydı (aynı metro yolculuğu gidişte
+  // "Metro", dönüşte "Araba 1 km + Metro"). Komşusu metroya dönen kör parça da metro kalır.
+  const toMetro = new Set(), toCar = [];
   runs.forEach((r, i) => {
     if (r.c !== 'B' || r.mode !== 'metro') return;
     const nb = [runs[i - 1], runs[i + 1]].filter((x) => x && x.c === 'F' && x.mode === 'car');
     if (!nb.length) return;
     const nd = nb.reduce((s, x) => s + x.d, 0);
-    if (r.d >= 2 * nd) nb.forEach((x) => { x.mode = 'metro'; }); else r.mode = 'car';
+    if (r.d >= 2 * nd) nb.forEach((x) => toMetro.add(x)); else toCar.push([r, nb]);
   });
+  toMetro.forEach((x) => { x.mode = 'metro'; });
+  for (const [r, nb] of toCar) if (!nb.some((x) => toMetro.has(x))) r.mode = 'car';
   // İki araç parçası arasındaki kısa/yerinde yavaşlık = bekleme (trafik, durak) -> araca kat.
   // Ama gerçek yürüyüşse (araçtan inip 1-2 dk yürüyüp başka araca binmek) ayrı yaya parçası kalır.
   runs.forEach((r, i) => {
@@ -532,8 +566,10 @@ function findWaits(p, a, b) {
 //  • yaya/bisiklet düzeltmesi ya da tek türlü yolculuk: bütün yolculuk tek tür sayılır (overridden).
 function applyOverride(it, ov) {
   it.override = ov; it.autoMode = it.mode;
-  if (ov === it.mode) return;
   const mixed = it.legs.some((l) => l.mode === 'walk') && it.legs.some((l) => l.mode !== 'walk');
+  // Ana türle aynı seçim etkisizdir — AMA yaya/bisiklet seçimi "hepsi bu tür" demektir: yürüyüşün ortasındaki sahte
+  // araç parçasını silmenin tek yolu bu (eskiden ana tür zaten "yaya" olduğu için düğme seçili görünüp hiçbir şey olmuyordu).
+  if (ov === it.mode && (it.legs.every((l) => l.mode === ov) || (ov !== 'walk' && ov !== 'bike'))) return;
   if (mixed && ov !== 'walk' && ov !== 'bike') {
     for (const l of it.legs) if (l.mode !== 'walk') {
       l.autoMode = l.mode; l.mode = ov; // autoMode: yola oturtma anahtarı bununla
@@ -543,6 +579,11 @@ function applyOverride(it, ov) {
     it.dist = it.legs.reduce((s, l) => s + l.dist, 0); it.avg = it.dist / (it.dur / 1000);
     setTripMode(it);
     return;
+  }
+  // Bütün yolculuk tek tür. Metro'da (karışık dalla tutarlı) yola oturtulmuş çizgi ve yol mesafesi bırakılmaz.
+  if (ov === 'metro' && it.legs.some((l) => l.snap)) {
+    for (const l of it.legs) if (l.snap) { l.snap = null; l.dist = l.rawDist != null ? l.rawDist : l.dist; l.avg = l.dist / (l.dur / 1000); }
+    it.dist = it.legs.reduce((s, l) => s + l.dist, 0); it.avg = it.dist / (it.dur / 1000);
   }
   it.mode = ov; it.overridden = true;
 }
@@ -604,11 +645,22 @@ export function segment(points, acts, busNear) {
 // HİÇ kanıt yoksa silinir ve iki yanındaki durak birleştirilir. Kanıt: hareket algılayıcısının
 // "yürüyor/araçta/bisiklet/koşu" demesi ya da GPS'in iyi doğrulukla (≤ 25 m) en az 3 noktada gerçek hız ölçmesi.
 function dropPhantoms(items, actAt) {
-  const moved = (trip) => {
+  const moved = (trip, from) => {
     for (let t = trip.t0; t <= trip.t1; t += 10e3) { const k = actAt(t); if (k && k !== 'S') return true; }
     let good = 0, fair = 0;
     for (const q of trip.pts) if (q.spd != null && q.spd > 1.0) { if (q.acc == null || q.acc <= 25) good++; else if (q.acc <= 50) fair++; }
-    return good >= 3 || fair >= 6; // kaba noktada da ölçülmüş hız çoksa gerçek harekettir
+    if (good >= 3 || fair >= 6) return true; // kaba noktada da ölçülmüş hız çoksa gerçek harekettir
+    // Hızsız (Wi-Fi/baz, pil profili) noktalarla gerçek gidiş-dönüş: en az 5 nokta duraktan uzak VE bu uzak noktalar
+    // tek bir yere öbeklenmemiş, bir yol boyunca yayılmış. Wi-Fi sıçraması hep aynı uzak yeri gösterir (öbek) → hayalet
+    // kalır; yürüyüş/araç izi ise yayılır (eskiden algılayıcı sessizse 12 dk'lık market gidiş-dönüşü siliniyordu).
+    const far = trip.pts.filter((q) => !q.syn && hav(q, from) > Math.max(100, 2 * (q.acc || 0)));
+    if (far.length >= 5) {
+      const accM = quantile(far.map((q) => q.acc || 0), 0.5);
+      let spread = 0;
+      for (const q of far) spread = Math.max(spread, hav(q, far[0]));
+      if (spread > Math.max(100, 2 * accM)) return true;
+    }
+    return false;
   };
   for (let i = 1; i < items.length - 1; i++) {
     const a = items[i - 1], t = items[i], b = items[i + 1];
@@ -617,7 +669,7 @@ function dropPhantoms(items, actAt) {
     // kaba yolculuk da ancak kısa (≤ 30 dk) ve küçükse (≤ 1 km) hayalet olabilir — 40 dk / 5 km'lik gerçek bir
     // gidiş-dönüş, GPS kaba diye silinmez
     const coarse = quantile(t.pts.map((q) => (q.acc == null ? 99 : q.acc)), 0.5) > 30 && t.dur <= 2 * CFG.PHANTOM_MAX && t.dist <= CFG.PHANTOM_D;
-    if ((t.dur > CFG.PHANTOM_MAX && !coarse) || hav(a, b) > CFG.R_PLACE || moved(t)) continue;
+    if ((t.dur > CFG.PHANTOM_MAX && !coarse) || hav(a, b) > CFG.R_PLACE || moved(t, a)) continue;
     // sil: a ile b tek durak olur
     const w1 = a.t1 - a.t0, w2 = b.t1 - b.t0;
     a.lat = (a.lat * w1 + b.lat * w2) / (w1 + w2 || 1); a.lon = (a.lon * w1 + b.lon * w2) / (w1 + w2 || 1);
@@ -690,6 +742,7 @@ function buildPlaces(stays, saved, from, to, detect, hints) {
   }
   for (const pl of places) { pl.total = 0; pl.visits = 0; pl.night = 0; pl.work = 0; pl.daySet = new Set(); pl.wdSet = new Set(); }
   for (const st of stays) {
+    if (!st.wait) st.place.realAny = true; // aralık dışında da gerçek durak görülmüş mü (adlandırma için)
     const a = Math.max(st.t0, from), b = Math.min(st.t1, to);
     if (b <= a) continue;
     const pl = st.place;
@@ -706,7 +759,8 @@ function buildPlaces(stays, saved, from, to, detect, hints) {
   for (const kind of ['home', 'work']) {
     if (places.some((pl) => pl.saved && pl.saved.kind === kind)) continue;
     const h = hints && hints[kind];
-    let pick = h ? used.find((pl) => !pl.kind && hav(pl, h) <= CFG.R_PLACE) : null;
+    // ipucuna EN YAKIN aday (eskiden listede ilk bulunan: yakındaki kafe "Ev" olabiliyordu — tarama)
+    let pick = h ? used.filter((pl) => !pl.kind && hav(pl, h) <= CFG.R_PLACE).sort((x, y) => hav(x, h) - hav(y, h))[0] : null;
     if (!pick && detect) {
       const cand = used.filter((pl) => !pl.kind);
       pick = kind === 'home'
@@ -717,12 +771,34 @@ function buildPlaces(stays, saved, from, to, detect, hints) {
   }
   used.sort((x, y) => y.total - x.total);
   let k = 1;
+  // Yalnız otobüs/metro beklemesi görülen yer: durak. Yalnız ADRESLE kaydedilmiş yer (otomatik adres sorgusu) yine
+  // durak sayılır — eskiden durakta 10+ dk bekleyince adres kaydı onu "gerçek yer" yapıyor, Ev → İş rutini kalıcı
+  // olarak "Ev → durak" + "durak → İş" diye bölünüyordu (tarama). Kullanıcı ad ya da tür verdiyse gerçek yerdir.
+  const userSaved = (pl) => !!(pl.saved && (pl.saved.name || pl.saved.kind));
   for (const pl of used) {
     pl.days = pl.daySet.size;
-    pl.waitOnly = !pl.real && !pl.saved; // yalnız otobüs/metro beklemesi görülen yer: durak
+    pl.waitOnly = !pl.real && !userSaved(pl);
     if (!pl.name) pl.name = pl.kind === 'home' ? 'Ev' : pl.kind === 'work' ? 'İş' : pl.addr || (pl.waitOnly ? 'Durak ' : 'Konum ') + k++;
   }
+  // Aralıkta hiç kalınmamış ama yolculuğun ucu olan yerler (gece yarısını aşan son yolculuğun varışı) de ad alır —
+  // yoksa Günlük'te yolculuk "Konum 1 → ?" yerine yalnız tür adıyla görünüyordu. Sıralamaya girmez, numara devam eder.
+  for (const pl of places) if (!pl.name && pl.total === 0 && pl.visits === 0) {
+    const wo = !pl.realAny && !userSaved(pl);
+    pl.name = pl.kind === 'home' ? 'Ev' : pl.kind === 'work' ? 'İş' : pl.addr || (wo ? 'Durak ' : 'Konum ') + k++;
+  }
   return used;
+}
+
+// Gün içi dakikaların (0..1439) min/max/ortalaması SAAT DAİRESİNDE: 23:50 ve 00:10 → aralık 23:50–00:10, ort. 00:00.
+// (Düz hesapta "00:10–23:50, ort 12:00" çıkıyordu — gece vardiyası / geç dönüş rutinleri, tarama.) En büyük boşluğun
+// arkasından başlayacak şekilde döndürülür, hesaplanır, geri çevrilir.
+function clock(arr) {
+  const v = [...arr].sort((a, b) => a - b);
+  let start = v[0], gap = v[0] + 1440 - v[v.length - 1];
+  for (let i = 1; i < v.length; i++) if (v[i] - v[i - 1] > gap) { gap = v[i] - v[i - 1]; start = v[i]; }
+  const sh = v.map((x) => (x - start + 1440) % 1440);
+  const back = (x) => (Math.round(x) + start) % 1440;
+  return { min: back(Math.min(...sh)), max: back(Math.max(...sh)), avg: back(sh.reduce((s, x) => s + x, 0) / sh.length) };
 }
 
 // ---- 6) Rutinler: önemli yerler arası A→B; çıkış ve varış saat aralıkları ----
@@ -750,10 +826,91 @@ function buildRoutines(items, places) {
     const mc = {}; g.forEach((j) => { if (j.mode) mc[j.mode] = (mc[j.mode] || 0) + 1; });
     return {
       from: g[0].from, to: g[0].to, count: g.length, list: g,
-      dep: stat(g.map((j) => minOfDay(j.dep))), arr: stat(g.map((j) => minOfDay(j.arr))), // gün içi dakika
+      dep: clock(g.map((j) => minOfDay(j.dep))), arr: clock(g.map((j) => minOfDay(j.arr))), // gün içi dakika (dairesel)
       dur: stat(g.map((j) => j.dur)), mode: Object.keys(mc).sort((x, y) => mc[y] - mc[x])[0] || null,
     };
   }).sort((x, y) => y.count - x.count);
+}
+
+// ---- 7) Güzergâh karşılaştırma: bir rutinin (ör. Ev → İş) seferleri hangi yollardan gitmiş, hangisi ne kadar sürmüş ----
+// journeys: rutinin seferleri [{dep, arr, dur, ...}] (buildRoutines → list); trips: aynı dönemin yolculukları (tam
+// çözünürlük). Her sefere çıkış–varış arasındaki yolculuklar bağlanır. İzler yol boyunca eşit aralıklı ROUTE_N
+// noktaya örneklenir; iki seferin farkı = bir izin noktalarının öbür ize ORTALAMA uzaklığı (iki yönün büyüğü: biri
+// arada sapma yapıp dönse de yakalanır). ROUTE_R'den yakın seferler aynı güzergâh. Ana tür (en çok mesafe) farklıysa
+// (otobüs ↔ araba) aynı sokaktan gidilse de ayrı seçenektir — süre farkının sebebi türdür.
+// Dönüş: { alts: [{n, mode, seq, path, list, dur:{avg,min,max}, dist, walk, depMin}], fastest: index, dep: çıkış saati etkisi | null }
+const RAD_ = Math.PI / 180;
+function resample(pts, n) {
+  if (pts.length < 2) return pts.map((p) => ({ lat: p.lat, lon: p.lon }));
+  const cum = [0];
+  for (let i = 1; i < pts.length; i++) cum.push(cum[i - 1] + hav(pts[i - 1], pts[i]));
+  const L = cum[cum.length - 1], out = [];
+  if (L <= 0) return [{ lat: pts[0].lat, lon: pts[0].lon }];
+  for (let k = 0, j = 1; k < n; k++) {
+    const s = (L * k) / (n - 1);
+    while (j < pts.length - 1 && cum[j] < s) j++;
+    const a = pts[j - 1], b = pts[j], f = cum[j] > cum[j - 1] ? Math.min(1, Math.max(0, (s - cum[j - 1]) / (cum[j] - cum[j - 1]))) : 0;
+    out.push({ lat: a.lat + (b.lat - a.lat) * f, lon: a.lon + (b.lon - a.lon) * f });
+  }
+  return out;
+}
+// p noktasının ab doğru parçasına uzaklığı (m; kısa mesafede düzlem yaklaşımı)
+function segDist(p, a, b) {
+  const k = Math.cos(p.lat * RAD_) * 111320, ax = (a.lon - p.lon) * k, ay = (a.lat - p.lat) * 111320, bx = (b.lon - p.lon) * k, by = (b.lat - p.lat) * 111320;
+  const dx = bx - ax, dy = by - ay, L2 = dx * dx + dy * dy;
+  const t = L2 ? Math.min(1, Math.max(0, -(ax * dx + ay * dy) / L2)) : 0;
+  return Math.hypot(ax + dx * t, ay + dy * t);
+}
+const meanTo = (A, B) => { let s = 0; for (const p of A) { let m = Infinity; for (let i = 1; i < B.length; i++) m = Math.min(m, segDist(p, B[i - 1], B[i])); s += B.length > 1 ? m : hav(p, B[0]); } return s / A.length; };
+export const routeGap = (A, B) => Math.max(meanTo(A, B), meanTo(B, A));
+
+export function compareRoutes(journeys, trips) {
+  const J = [];
+  for (const j of journeys) {
+    const tr = trips.filter((t) => t.type === 'trip' && t.t0 < j.arr && t.t1 > j.dep).sort((a, b) => a.t0 - b.t0);
+    if (!tr.length) continue;
+    const pts = tr.flatMap((t) => t.pts.filter((q) => !q.syn)), md = {}, seq = [];
+    let dist = 0, walk = 0;
+    for (const t of tr) for (const l of t.legs) {
+      const m = t.overridden ? t.mode : l.mode;
+      md[m] = (md[m] || 0) + l.dist; dist += l.dist; if (m === 'walk') walk += l.dist;
+      if (seq[seq.length - 1] !== m) seq.push(m);
+    }
+    const veh = Object.keys(md).filter((m) => m !== 'walk').sort((a, b) => md[b] - md[a])[0];
+    const d = new Date(j.dep);
+    J.push({ ...j, trips: tr, dist, walk, mode: veh || 'walk', seq: seq.join('+'), shape: resample(pts, CFG.ROUTE_N), depMin: d.getHours() * 60 + d.getMinutes() });
+  }
+  // Öbekle: önce ana tür, sonra iz benzerliği (en yakın öbeğin temsilcisine ROUTE_R'den yakınsa ona katıl)
+  const groups = [];
+  for (const j of J) {
+    let best = null, bd = Infinity;
+    for (const g of groups) { if (g.mode !== j.mode) continue; const x = routeGap(j.shape, g.rep.shape); if (x < bd) { bd = x; best = g; } }
+    if (best && bd <= CFG.ROUTE_R) best.list.push(j); else groups.push({ mode: j.mode, rep: j, list: [j] });
+  }
+  const avg = (a) => a.reduce((s, x) => s + x, 0) / a.length;
+  const alts = groups.map((g) => {
+    // temsilci: öbeğin "ortadaki" seferi (öbürlerine toplam uzaklığı en küçük) — haritada o çizilir
+    let rep = g.list[0], rs = Infinity;
+    if (g.list.length > 2) for (const a of g.list) { const s = g.list.reduce((t, b) => t + (a === b ? 0 : routeGap(a.shape, b.shape)), 0); if (s < rs) { rs = s; rep = a; } }
+    const durs = g.list.map((x) => x.dur);
+    return {
+      n: g.list.length, mode: g.mode, seq: rep.seq, rep, list: g.list,
+      dur: { avg: avg(durs), min: Math.min(...durs), max: Math.max(...durs) },
+      dist: avg(g.list.map((x) => x.dist)), walk: avg(g.list.map((x) => x.walk)), depMin: Math.round(avg(g.list.map((x) => x.depMin))),
+    };
+  }).sort((a, b) => b.n - a.n || a.dur.avg - b.dur.avg);
+  let fastest = -1;
+  alts.forEach((a, i) => { if (fastest < 0 || a.dur.avg < alts[fastest].dur.avg) fastest = i; });
+  // Çıkış saatinin etkisi: YALNIZ en sık seçenek içinde (aynı yol + aynı tür) — karışık hesaplanınca "geç çıktığım
+  // gün arabaya bindim" gibi tür farkı saat etkisi sanılıyordu. Seferler çıkış saatine göre ikiye bölünür.
+  let dep = null;
+  const top = alts[0];
+  if (top && top.n >= 4) {
+    const s = [...top.list].sort((a, b) => a.depMin - b.depMin), h = Math.floor(s.length / 2);
+    const early = s.slice(0, h), late = s.slice(h);
+    dep = { alt: 0, split: late[0].depMin, early: avg(early.map((x) => x.dur)), late: avg(late.map((x) => x.dur)), nEarly: early.length, nLate: late.length };
+  }
+  return { alts, fastest, dep, n: J.length };
 }
 
 // ---- Ana giriş ----
@@ -774,9 +931,12 @@ export function analyze(rawPoints, opt) {
     if (!curLine || segKind(prevPt, q) !== 'move') { curLine = []; track.push(curLine); }
     curLine.push(q); prevPt = q;
   }
-  const nPoints = raw.filter((q) => q.t >= from && q.t < to).length;
-  const lastT = raw.length ? raw[raw.length - 1].t : null;
-  const lastPt = raw.length ? { ...raw[raw.length - 1] } : null; // canlı konum gelmezse haritadaki nokta için
+  // Nokta sayısı ve "son kayıt" GÖRÜLEN aralıktan (eskiden ±1 gün paylı aralıktan: geçmiş günde ertesi günün saati,
+  // hiç kaydı olmayan günde bile "0 nokta · son 23:59:24" yazıyordu — tarama)
+  const inR = raw.filter((q) => q.t >= from && q.t < to);
+  const nPoints = inR.length;
+  const lastT = inR.length ? inR[inR.length - 1].t : null;
+  const lastPt = inR.length ? { ...inR[inR.length - 1] } : null; // canlı konum gelmezse haritadaki nokta için
   const p = inferDepartures(raw);
   // Kayıt açık ve son nokta eskiyse: hâlâ orada duruyoruz (hareketsizken nokta gelmez).
   if (now && p.length && now - p[p.length - 1].t >= CFG.MIN_STAY) p.push({ ...p[p.length - 1], t: now });

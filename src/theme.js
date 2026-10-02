@@ -43,6 +43,8 @@ export function fmtDurS(ms) {
   if (sec < 600) return Math.floor(sec / 60) + ' dk' + (sec % 60 ? ' ' + (sec % 60) + ' sn' : '');
   return fmtDur(ms);
 }
-export const fmtKm = (m) => (m < 1000 ? Math.round(m) + ' m' : (m / 1000).toFixed(m < 10000 ? 1 : 0) + ' km');
+// Türkçe ondalık ayırıcı virgül: 7,9 km (toFixed nokta verir)
+export const fmtDec = (x, n) => x.toFixed(n).replace('.', ',');
+export const fmtKm = (m) => (m < 1000 ? Math.round(m) + ' m' : fmtDec(m / 1000, m < 10000 ? 1 : 0) + ' km');
 export const fmtKmh = (ms) => Math.round(ms * 3.6) + ' km/s';
 export const fmtInt = (n) => String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/g, ' '); // 12 345

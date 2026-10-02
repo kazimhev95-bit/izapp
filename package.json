@@ -29,7 +29,7 @@
     "start": "expo start",
     "ios": "expo start --ios",
     "web": "expo start --web",
-    "test": "node test/engine.test.mjs"
+    "test": "node test/engine.test.mjs && node test/lock.test.mjs"
   },
   "private": true
 }

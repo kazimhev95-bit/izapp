@@ -8,7 +8,7 @@ import { getKV, setKV, addLog, insertBattery, getBattery } from './store';
 // ---- Uygulama kilidi ----
 // Konum geçmişi hassas veridir. Kilit açıkken uygulama her öne gelişinde (LOCK_GRACE'ten uzun arkada kaldıysa)
 // Face ID / Touch ID ister; telefonda biyometri yoksa iOS kendi şifre ekranını açar.
-export const LOCK_GRACE = 30e3; // ms — bu kadar kısa süre arkada kaldıysa yeniden sorma (bildirim bakıp dönme)
+export { LOCK_GRACE } from './lockrule'; // kilit kararı: lockrule.js (ne zaman kilitlenir)
 export const lockOn = () => getKV('lock', false);
 export function setLock(on) { setKV('lock', !!on); addLog('ayar', 'uygulama kilidi: ' + (on ? 'açık' : 'kapalı')); }
 // Telefonda kilit kurulabilir mi? (biyometri ya da şifre kayıtlı)
@@ -54,22 +54,34 @@ export function batteryReport(a, b) {
     const m = out.modes[p.mode || 'high'] || (out.modes[p.mode || 'high'] = { h: 0, drop: 0 });
     m.h += h; m.drop += d;
   }
-  out.perHour = out.hours > 0.25 ? out.drop / out.hours : null;
-  for (const m of Object.values(out.modes)) m.perHour = m.h > 0.25 ? m.drop / m.h : null;
+  // iOS pil seviyesini %5 ADIMLA verir: 26 dk'lık tek bir %5 düşüş "11,4 %/sa" görünüyordu; aynı tüketim bir kipte diğerinin
+  // 2 katı çıkabiliyordu (tarama). Oran ancak en az 2 saat ve %10 düşüş biriktiyse anlamlı; yoksa null ('—').
+  const rate = (drop, h) => (h >= 2 && drop >= 10 ? drop / h : null);
+  out.perHour = rate(out.drop, out.hours);
+  for (const m of Object.values(out.modes)) m.perHour = rate(m.drop, m.h);
   return out;
 }
 
 // ---- Barometre ----
 // Basınç (hPa) her konum noktasına eklenir. 1 hPa ≈ 8,5 m yükseklik: metroya iniş 2-3 hPa artış, köprü/viyadük düşüş.
 // Motor bunu GPS'siz parçada "metro mu tünel mi" ayrımında kullanır (kullanılmıyorsa veri yine kaydedilir — ileride analiz).
-let baro = null, baroSub = null;
+// Sürekli dinlenmez: iOS'ta güncelleme aralığı yok sayılıyor (expo-sensors BarometerModule "Nothing we can do"), sürekli
+// dinleyici JS'i arka planda saniyede bir uyandırıyordu — konumları 5 sn'lik demetle alıp kazanılan pil boşa gidiyordu
+// (tarama). Dakikada bir kısa abone olunur, ilk ölçüm alınınca bırakılır. Metro inişi dakikalar sürer; 1 dk yeter.
+let baro = null, baroTimer = null;
+function sampleBaro() {
+  let sub = null;
+  const done = () => { if (sub) { sub.remove(); sub = null; } };
+  try { sub = Barometer.addListener((m) => { if (m && m.pressure > 300) baro = Math.round(m.pressure * 10) / 10; done(); }); } catch (e) { return; }
+  setTimeout(done, 3000); // ölçüm gelmezse de bırak
+}
 export function startBarometer() {
-  if (baroSub) return;
+  if (baroTimer) return;
   Barometer.isAvailableAsync().then((ok) => {
-    if (!ok) return;
-    Barometer.setUpdateInterval(5000);
-    baroSub = Barometer.addListener((m) => { if (m && m.pressure > 300) baro = Math.round(m.pressure * 10) / 10; });
+    if (!ok || baroTimer) return;
+    sampleBaro();
+    baroTimer = setInterval(sampleBaro, 60e3);
   }).catch(() => {});
 }
-export function stopBarometer() { if (baroSub) { baroSub.remove(); baroSub = null; } baro = null; }
+export function stopBarometer() { if (baroTimer) { clearInterval(baroTimer); baroTimer = null; } baro = null; }
 export const pressure = () => baro;

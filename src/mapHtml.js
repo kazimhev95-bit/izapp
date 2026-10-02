@@ -155,8 +155,9 @@ export const MAP_HTML = `<!doctype html>
 export function mapPayload({ legs, stays, marks, dots, rings, pad }, colors, fit) {
   const W = { raw: 2, track: 3 };
   const L = legs.map((l) => ({
-    color: colors[l.mode].color, dash: !!l.dash || l.mode === 'track', w: W[l.mode] || 5,
-    op: l.weak ? 0.55 : l.mode === 'track' ? 0.9 : 1,   // GPS'i zayıf parça soluk: "burası yaklaşık"
+    // l.color / l.op: isteğe bağlı (güzergâh karşılaştırmada her yol kendi renginde, seçilmeyenler soluk)
+    color: l.color || colors[l.mode].color, dash: !!l.dash || l.mode === 'track', w: W[l.mode] || 5,
+    op: l.op != null ? l.op : l.weak ? 0.55 : l.mode === 'track' ? 0.9 : 1,   // GPS'i zayıf parça soluk: "burası yaklaşık"
     arrows: !W[l.mode] && !l.dash,                      // yön okları yalnız asıl çizgide
     info: l.info || null, trip: l.trip == null ? null : l.trip,
     pts: l.coords.map((c) => [c.latitude, c.longitude]),
